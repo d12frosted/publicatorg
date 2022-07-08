@@ -1,0 +1,12 @@
+* publicatorg
+:PROPERTIES:
+:ID:                     30b51992-80b5-4552-ae90-15fc6114f22c
+:END:
+
+*Publicator* - something that makes something public.
+
+*Org* - A GNU Emacs major mode for keeping notes.
+
+*Publicatorg* - something that makes org notes public.
+
+Documentation is to be done. Use [[https://github.com/d12frosted/barberry.io][barberry.io]] as example of publicatorg usage.
