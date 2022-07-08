@@ -1,0 +1,16 @@
+; -*- mode: emacs-lisp; lexical-binding: t -*-
+
+;; Autodetermined by `eldev init'.
+(eldev-use-package-archive 'melpa)
+
+(eldev-use-plugin 'autoloads)
+
+
+;; Linting configurations.
+
+;; Tell checkdoc not to demand two spaces after a period.
+(setq sentence-end-double-space nil)
+
+(with-eval-after-load 'package-lint
+  ;; custom prefix: publicatorg -> porg
+  (setq-default package-lint--sane-prefixes (rx string-start "porg-")))
