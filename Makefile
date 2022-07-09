@@ -4,11 +4,11 @@ clean:
 
 .PHONY: prepare
 prepare:
-	eldev -C --unstable -p -dtT prepare
+	eldev -C -p -dtT prepare
 
 .PHONY: lint
 lint:
-	eldev -C --unstable -p -dtT lint
+	eldev -C -p -dtT lint
 
 # If the first argument is "test"...
 ifeq (test,$(firstword $(MAKECMDGOALS)))
@@ -20,4 +20,4 @@ endif
 
 .PHONY: test
 test:
-	eldev -C --unstable -p -dtT test $(TEST_ARGS)
+	eldev -C -p -dtT test $(TEST_ARGS)
