@@ -194,23 +194,29 @@ takes attachment name and returns non-nil if attachment should be
 copied. When FILTER-FN is not provided, all attachments are copied.
 
 OWNER allows to steal attachments of one NOTE to another OWNER."
-  (vulpea-utils-with-note note
-    (->>
-     (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
-     (--filter
-      (and (string-equal (org-ml-get-property :type it) "attachment")
-           (or (not filter) (funcall filter (org-ml-get-property :path it)))))
-     (--map
-      (let* ((path (org-ml-get-property :path it))
-             (dir (if (functionp dir) (funcall dir path) dir))
-             (newname (concat (file-name-as-directory dir) path))
-             (newname (if file-mod (funcall file-mod newname) newname)))
-        (goto-char (org-ml-get-property :begin it))
-        (porg-rule-output
-         :id (concat (vulpea-note-id (or owner note)) ":" path)
-         :type "attachment"
-         :item (org-attach-expand path)
-         :file newname))))))
+  (->> note
+       (vulpea-note-path)
+       (org-roam-db-query
+        [:select id
+         :from nodes
+         :where (= $s1 file)])
+       (-map #'car)
+       (vulpea-db-query-by-ids)
+       (-mapcat (lambda (a)
+                  (->> a
+                       (vulpea-note-links)
+                       (--filter (and (string-equal (car it) "attachment")
+                                      (or (not filter) (funcall filter (cdr it)))))
+                       (--map (cdr it))
+                       (--map
+                        (let* ((dir (if (functionp dir) (funcall dir it) dir))
+                               (newname (concat (file-name-as-directory dir) it))
+                               (newname (if file-mod (funcall file-mod newname) newname)))
+                          (porg-rule-output
+                           :id (concat (vulpea-note-id (or owner note)) ":" it)
+                           :type "attachment"
+                           :item (expand-file-name it (vulpea-note-attach-dir a))
+                           :file newname))))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
