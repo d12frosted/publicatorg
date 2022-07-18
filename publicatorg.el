@@ -436,15 +436,23 @@ Throws a user error if any of the input has no matching rule."
     (porg-log "found %s notes to resolve." size)
 
     (--each input
-      (porg-debug "%s outputs:" (porg-describe it))
+      (porg-debug "%s outputs:" (funcall describe it))
       (if-let ((rule (porg-project-resolve-rule project it)))
           (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
                     (funcall outputs-fn it))
-            (porg-debug "- %s" (porg-describe it))
+            (porg-debug "- %s" (funcall describe it))
             (if-let ((compiler (porg-project-resolve-compiler project it)))
                 (let* ((target-rel (porg-rule-output-file it))
                        (target-abs (when target-rel
                                      (expand-file-name target-rel (porg-project-root project)))))
+                  (porg-debug "  - rel: %s" target-rel)
+                  (porg-debug "  - abs: %s" target-abs)
+                  (porg-debug "  - hard deps:")
+                  (--each (porg-rule-output-hard-deps it)
+                    (porg-debug "    - %s" (funcall describe it)))
+                  (porg-debug "  - soft deps:")
+                  (--each (porg-rule-output-soft-deps it)
+                    (porg-debug "    - %s" (funcall describe it)))
                   (puthash
                    (porg-rule-output-id it)
                    (porg-item-create
@@ -503,7 +511,8 @@ Throws a user error if any of the input has no matching rule."
   "Calculate build plan of ITEMS for PROJECT with CACHE.
 
 Result is a property list (:compile :delete)."
-  (let* ((project-hash (porg-project-hash project 'ignore-rules))
+  (let* ((describe (porg-project-describe project))
+         (project-hash (porg-project-hash project 'ignore-rules))
          (project-updated (not (string-equal
                                 project-hash
                                 (porg-cache-query
@@ -526,7 +535,7 @@ Result is a property list (:compile :delete)."
                                 cache (concat "rule:" (porg-rule-name rule))
                                 #'porg-cache-item-hash)))))
                     (when res (porg-debug "%s: rule %s changed"
-                                          (porg-describe item)
+                                          (funcall describe item)
                                           (porg-rule-name rule)))
                     res)
                   ;; compiler changed
@@ -537,7 +546,7 @@ Result is a property list (:compile :delete)."
                                 cache (concat "compiler:" (porg-compiler-name compiler))
                                 #'porg-cache-item-hash)))))
                     (when res (porg-debug "%s: compiler %s changed"
-                                          (porg-describe item)
+                                          (funcall describe item)
                                           (porg-compiler-name compiler)))
                     res)
                   ;; item itself is changed
@@ -545,7 +554,7 @@ Result is a property list (:compile :delete)."
                               (string-equal
                                (porg-item-hash item)
                                (porg-cache-query cache id #'porg-cache-item-hash)))))
-                    (when res (porg-debug "%s: content changed" (porg-describe item)))
+                    (when res (porg-debug "%s: content changed" (funcall describe item)))
                     res)
 
                   ;; one of the deps is changed
@@ -558,8 +567,8 @@ Result is a property list (:compile :delete)."
                                                           (porg-cache-query cache a-id #'porg-cache-item-hash))))))
                          (when res
                            (porg-debug "%s: dependency %s changed"
-                                       (porg-describe item)
-                                       (if a (porg-describe a) a-id)))
+                                       (funcall describe item)
+                                       (if a (funcall describe a) a-id)))
                          res)))
                    (porg-item-deps item)))))
              (hash-table-keys items))))
