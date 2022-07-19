@@ -17,4 +17,7 @@
 
 (with-eval-after-load 'package-lint
   ;; custom prefix: publicatorg -> porg
-  (setq-default package-lint--sane-prefixes (rx string-start "porg-")))
+  (setq-default package-lint--sane-prefixes (rx string-start "porg-"))
+
+  (defun package-lint--check-emacs-version (_)
+    "Do nothing"))
