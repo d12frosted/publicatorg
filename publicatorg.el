@@ -45,13 +45,17 @@
 (cl-defgeneric porg-describe (thing)
   "Describe THING.")
 
+(cl-defmethod porg-describe ((thing string))
+  "Describe THING."
+  thing)
+
 
 
 (cl-defstruct (porg-project (:constructor porg-project-create)
                             (:copier porg-project-copy))
   (name nil :read-only t :type string)
   (root nil :read-only t :type string)
-  (cache-file  nil :read-only t :type string)
+  (cache-file nil :read-only t :type string)
   (input nil :read-only t :type function)
   (describe #'porg-describe :read-only t :type function)
   (rules nil :type list)
@@ -479,16 +483,16 @@ Throws a user error if any of the input has no matching rule."
               (setf without-compiler (cons it without-compiler))))
         (setf without-rule (cons it without-rule))))
 
-    (message "Found %s items to resolve" (seq-length (hash-table-keys tbl)))
+    (porg-log "found %s items to resolve" (seq-length (hash-table-keys tbl)))
 
     ;; quit if not all input can be handled by this project rules or compilers
     (when without-rule
-      (porg-log "Could not find rule for %s notes:" (seq-length without-rule))
+      (porg-log "could not find rule for %s notes:" (seq-length without-rule))
       (--each without-rule
         (porg-log "- %s" (funcall describe it)))
       (user-error "Not all input notes have matching rules, see above"))
     (when without-compiler
-      (porg-log "Could not find compiler for %s items:" (seq-length without-compiler))
+      (porg-log "could not find compiler for %s items:" (seq-length without-compiler))
       (--each without-compiler
         (porg-log "- %s" (funcall describe it)))
       (user-error "Not all items have matching compilers, see above"))
@@ -496,11 +500,12 @@ Throws a user error if any of the input has no matching rule."
     (when-let ((missing (--filter
                          (--remove (gethash it tbl) (porg-item-hard-deps it))
                          (hash-table-values tbl))))
-      (porg-log "Could not find dependencies for %s items:" (seq-length missing))
+      (porg-log "could not find dependencies for %s items" (seq-length missing))
       (-each missing
         (lambda (item)
+          (porg-log "missing hard dependencies of %s:" (funcall describe item))
           (--each (--filter (gethash it tbl) (porg-item-hard-deps item))
-            (porg-log "Missing hard dependency of '%s': '%s'" (porg-item-id item) it))))
+            (porg-log "- %s" (funcall describe it)))))
       (user-error "Missing some hard dependencies, see above"))
 
     tbl))
@@ -579,8 +584,8 @@ Result is a property list (:compile :delete)."
                       (s-prefix-p "compiler:" it))
                   (hash-table-keys cache))))
 
-    (porg-log "Found %s items to compile." (seq-length build))
-    (porg-log "Found %s items to delete." (seq-length delete))
+    (porg-log "found %s items to compile." (seq-length build))
+    (porg-log "found %s items to delete." (seq-length delete))
 
     (list
      :build build
