@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID:                     75c053d9-62eb-4f58-9e05-dbd6a23a9ef1
+:END:
+#+title: Note 3
+
+I am useless.

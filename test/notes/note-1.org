@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID:                     f3a5264e-963f-4059-b497-934d6e7df1ab
+:END:
+#+title: Note 1
+
+Luckily, I depend on [[id:2801a0b7-53fe-4128-8ea3-0e6344c4c64c][Note 2]].

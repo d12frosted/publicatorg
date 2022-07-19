@@ -5,6 +5,8 @@
 
 (eldev-use-plugin 'autoloads)
 
+(eldev-add-extra-dependencies 'test 'emacsql-sqlite-builtin)
+
 
 ;; Linting configurations.
 
