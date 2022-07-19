@@ -67,6 +67,12 @@
 ARGS are used to construct project."
   (let* ((project (apply #'porg-project-create args))
          (name (porg-project-name project)))
+    (unless name (user-error "Missing `name'"))
+    (unless (porg-project-root project) (user-error "Missing `root'"))
+    (unless (porg-project-cache-file project) (user-error "Missing `cache-file'"))
+    (unless (porg-project-input project) (user-error "Missing `input'"))
+    (unless (porg-project-rules project) (user-error "Missing `rules'"))
+    (unless (porg-project-compilers project) (user-error "Missing `compilers'"))
     (setf (porg-project-compilers project)
           (cons
            (porg-compiler
