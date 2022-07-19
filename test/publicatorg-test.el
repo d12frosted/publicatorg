@@ -96,7 +96,6 @@
 
 (defun porg-test-init ()
   "Initialize testing environment."
-  (setq org-roam-database-connector 'sqlite-builtin)
   (let ((original-dir porg-test-directory)
         (new-dir (expand-file-name (make-temp-name "notes") temporary-file-directory)))
     (copy-directory original-dir new-dir)
@@ -105,7 +104,8 @@
 (defun porg-test-init-in (dir)
   "Initialize testing environment in DIR."
   (setq org-roam-directory dir
-        org-roam-db-location (expand-file-name "org-roam.db" dir))
+        org-roam-db-location (expand-file-name "org-roam.db" dir)
+        org-roam-database-connector 'sqlite-builtin)
   (vulpea-db-autosync-enable)
   (org-roam-db-autosync-enable))
 
