@@ -175,7 +175,15 @@
       (delete-file (vulpea-note-path note-1))
       (porg-run "porg-test")
       (expect 'porg-test-clean-item :to-have-been-called-times 1)
-      (expect 'porg-test-build-item :to-have-been-called-times 1))))
+      (expect 'porg-test-build-item :to-have-been-called-times 1)))
+
+  (it "should rebuild an item when dependency is added"
+    (vulpea-create "Note 4"
+                   "note-4.org"
+                   :id "fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7"
+                   :immediate-finish t)
+    (porg-run "porg-test")
+    (expect 'porg-test-build-item :to-have-been-called-times 2)))
 
 
 
