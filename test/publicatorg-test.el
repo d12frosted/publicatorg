@@ -39,44 +39,44 @@
 (setq-default porg-log-level 'debug)
 
 (porg-define
-     :name "porg-test"
-     :root (file-name-as-directory (make-temp-file "porg-test" 'dir))
-     :cache-file "build-cache"
-     :describe
-     (lambda (x)
-       (cond
-        ((vulpea-note-p x) (concat "(note) " (file-name-nondirectory (vulpea-note-path x))))
-        ((porg-rule-output-p x) (concat "(output) " (porg-rule-output-file x)))
-        ((porg-item-p x) (concat "(item) " (porg-item-target-abs x)))
-        (t (format "%s" x))))
+ :name "porg-test"
+ :root (file-name-as-directory (make-temp-file "porg-test" 'dir))
+ :cache-file "build-cache"
+ :describe
+ (lambda (x)
+   (cond
+    ((vulpea-note-p x) (concat "(note) " (file-name-nondirectory (vulpea-note-path x))))
+    ((porg-rule-output-p x) (concat "(output) " (porg-rule-output-file x)))
+    ((porg-item-p x) (concat "(item) " (porg-item-target-abs x)))
+    (t (format "%s" x))))
 
-     :input
-     (lambda ()
-       (--filter
-        (and (null (vulpea-note-primary-title it))
-             (= 0 (vulpea-note-level it)))
-        (vulpea-db-query)))
+ :input
+ (lambda ()
+   (--filter
+    (and (null (vulpea-note-primary-title it))
+         (= 0 (vulpea-note-level it)))
+    (vulpea-db-query)))
 
-     :rules
+ :rules
+ (list
+  (porg-rule
+   :name "note"
+   :match #'identity
+   :outputs
+   (lambda (note)
      (list
-      (porg-rule
-       :name "note"
-       :match #'identity
-       :outputs
-       (lambda (note)
-         (list
-          (porg-note-output
-           note
-           :file (file-name-nondirectory (vulpea-note-path note)))))))
+      (porg-note-output
+       note
+       :file (file-name-nondirectory (vulpea-note-path note)))))))
 
-     :compilers
-     (list
-      (porg-compiler
-       :name "note"
-       :match #'identity
-       :hash #'porg-sha1sum
-       :build #'porg-test-build-item
-       :clean #'porg-test-clean-item)))
+ :compilers
+ (list
+  (porg-compiler
+   :name "note"
+   :match #'identity
+   :hash #'porg-sha1sum
+   :build #'porg-test-build-item
+   :clean #'porg-test-clean-item)))
 
 (defun porg-test-build-item (item _items _cache)
   "Build an ITEM."
