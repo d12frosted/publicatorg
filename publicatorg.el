@@ -573,10 +573,12 @@ Result is a property list (:compile :delete)."
                   (-any-p
                    (lambda (a-id)
                      (let ((a (gethash a-id items)))
-                       ;; soft deps can be missing
-                       (let ((res (and (not (null a))
-                                       (not (string-equal (porg-item-hash a)
-                                                          (porg-cache-query cache a-id #'porg-cache-item-hash))))))
+                       (let ((res (if a
+                                      ;; changed
+                                      (not (string-equal (porg-item-hash a)
+                                                         (porg-cache-query cache a-id #'porg-cache-item-hash)))
+                                    ;; removed
+                                    (porg-cache-query cache a-id #'porg-cache-item-hash))))
                          (when res
                            (porg-debug "%s: dependency %s changed"
                                        (funcall describe item)

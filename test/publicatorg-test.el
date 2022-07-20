@@ -157,7 +157,25 @@
   (it "should call cleanup for deleted note"
     (delete-file (expand-file-name "created-note-1.org" org-roam-directory))
     (porg-run "porg-test")
-    (expect 'porg-test-clean-item :to-have-been-called-times 1)))
+    (expect 'porg-test-clean-item :to-have-been-called-times 1))
+
+  (it "should rebuild an item when dependency is deleted"
+    (let ((note-1 (vulpea-create "created dep note 1"
+                                 "created-dep-note-1.org"
+                                 :immediate-finish t)))
+      (vulpea-create "created dep note 2"
+                     "created-dep-note-2.org"
+                     :immediate-finish t
+                     :body (concat "I depend on " (vulpea-utils-link-make-string note-1)))
+      (porg-run "porg-test")
+      (expect 'porg-test-build-item :to-have-been-called-times 2)
+
+      (spy-calls-reset 'porg-test-build-item)
+
+      (delete-file (vulpea-note-path note-1))
+      (porg-run "porg-test")
+      (expect 'porg-test-clean-item :to-have-been-called-times 1)
+      (expect 'porg-test-build-item :to-have-been-called-times 1))))
 
 
 
