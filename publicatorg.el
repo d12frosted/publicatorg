@@ -569,6 +569,14 @@ Result is a property list (:compile :delete)."
                     (when res (porg-debug "%s: content changed" (funcall describe item)))
                     res)
 
+                  ;; item has moved (might happen without change in the item itself)
+                  (let ((res (not
+                              (string-equal
+                               (porg-item-target-rel item)
+                               (porg-cache-query cache id #'porg-cache-item-output)))))
+                    (when res (porg-debug "%s: target changed" (funcall describe item)))
+                    res)
+
                   ;; one of the deps is changed
                   (-any-p
                    (lambda (a-id)
@@ -587,7 +595,11 @@ Result is a property list (:compile :delete)."
                    (porg-item-deps item)))))
              (hash-table-keys items))))
          (delete (--remove
-                  (or (gethash it items)
+                  (or (when-let* ((item (gethash it items))
+                                  (target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
+                        (if target-old
+                            (string-equal target-old (porg-item-target-rel item))
+                          item))
                       (s-prefix-p "project:" it)
                       (s-prefix-p "rule:" it)
                       (s-prefix-p "compiler:" it))

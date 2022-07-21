@@ -67,7 +67,10 @@
      (list
       (porg-note-output
        note
-       :file (file-name-nondirectory (vulpea-note-path note)))))))
+       :file (or
+              (vulpea-utils-with-note note
+                (vulpea-buffer-prop-get "output-file"))
+              (file-name-nondirectory (vulpea-note-path note))))))))
 
  :compilers
  (list
@@ -82,7 +85,8 @@
   "Build an ITEM."
   (copy-file
    (vulpea-note-path (porg-item-item item))
-   (porg-item-target-abs item)))
+   (porg-item-target-abs item)
+   t))
 
 (defun porg-test-clean-item (cache-item root)
   "Clean CACHE-ITEM from ROOT."
@@ -122,8 +126,8 @@
   (after-all (porg-test-teardown))
 
   (before-each
-    (spy-on 'porg-test-build-item)
-    (spy-on 'porg-test-clean-item))
+    (spy-on 'porg-test-build-item :and-call-through)
+    (spy-on 'porg-test-clean-item :and-call-through))
 
   (it "should build every item on the first run"
     (porg-run "porg-test")
@@ -183,7 +187,24 @@
                    :id "fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7"
                    :immediate-finish t)
     (porg-run "porg-test")
-    (expect 'porg-test-build-item :to-have-been-called-times 2)))
+    (expect 'porg-test-build-item :to-have-been-called-times 2))
+
+  (it "should delete and rebuild an item that changed output path"
+    (let ((note (vulpea-create "Dancing note"
+                               "dancing-note.org"
+                               :immediate-finish t)))
+      (porg-run "porg-test")
+      (expect 'porg-test-build-item :to-have-been-called-times 1)
+
+      (spy-calls-reset 'porg-test-build-item)
+
+      (vulpea-utils-with-note note
+        (vulpea-buffer-prop-set "output-file" "moving-note.org")
+        (save-buffer))
+
+      (porg-run "porg-test")
+      (expect 'porg-test-build-item :to-have-been-called-times 1)
+      (expect 'porg-test-clean-item :to-have-been-called-times 1))))
 
 
 
