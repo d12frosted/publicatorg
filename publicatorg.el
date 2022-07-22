@@ -313,7 +313,7 @@ element and value its hash."
                                            (porg-project-root project)))
              (cache (porg-cache-load cache-file))
              (describe (porg-project-describe project))
-             (items (porg-build-input project))
+             (items (porg-build-items project))
              (plan (porg-build-plan project items cache))
              (build-size (seq-length (plist-get plan :build)))
              (delete-size (seq-length (plist-get plan :delete)))
@@ -428,8 +428,8 @@ element and value its hash."
 
 
 
-(defun porg-build-input (project)
-  "Calculate input data for the PROJECT.
+(defun porg-build-items (project)
+  "Calculate PROJECT items to build.
 
 Result is a table, where key is note id and the value is `porg-item'.
 
