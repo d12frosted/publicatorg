@@ -589,9 +589,8 @@ Result is a property list (:compile :delete)."
                    (porg-item-deps item)))))
              (hash-table-keys items))))
          (delete (--remove
-                  (or (when-let* ((item (gethash it items))
-                                  (target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
-                        (if target-old
+                  (or (when-let* ((item (gethash it items)))
+                        (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
                             (string-equal target-old (porg-item-target-rel item))
                           item))
                       (s-prefix-p "project:" it)
