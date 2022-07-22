@@ -446,23 +446,23 @@ Throws a user error if any of the input has no matching rule."
     (porg-log "found %s notes to resolve." size)
 
     (--each input
-      (porg-debug "%s outputs:" (funcall describe it))
+      (porg-debug "- outputs of %s:" (funcall describe it))
       (if-let ((rule (porg-project-resolve-rule project it)))
           (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
                     (funcall outputs-fn it))
-            (porg-debug "- %s" (funcall describe it))
+            (porg-debug "  - %s" (funcall describe it))
             (if-let ((compiler (porg-project-resolve-compiler project it)))
                 (let* ((target-rel (porg-rule-output-file it))
                        (target-abs (when target-rel
                                      (expand-file-name target-rel (porg-project-root project)))))
-                  (porg-debug "  - rel: %s" target-rel)
-                  (porg-debug "  - abs: %s" target-abs)
-                  (porg-debug "  - hard deps:")
+                  (porg-debug "    - rel: %s" target-rel)
+                  (porg-debug "    - abs: %s" target-abs)
+                  (porg-debug "    - hard deps:")
                   (--each (porg-rule-output-hard-deps it)
-                    (porg-debug "    - %s" (funcall describe it)))
-                  (porg-debug "  - soft deps:")
+                    (porg-debug "      - %s" (funcall describe it)))
+                  (porg-debug "    - soft deps:")
                   (--each (porg-rule-output-soft-deps it)
-                    (porg-debug "    - %s" (funcall describe it)))
+                    (porg-debug "      - %s" (funcall describe it)))
                   (puthash
                    (porg-rule-output-id it)
                    (porg-item-create
