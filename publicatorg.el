@@ -313,7 +313,7 @@ element and value its hash."
                                            (porg-project-root project)))
              (cache (porg-cache-load cache-file))
              (describe (porg-project-describe project))
-             (items (porg-build-input project cache))
+             (items (porg-build-input project))
              (plan (porg-build-plan project items cache))
              (build-size (seq-length (plist-get plan :build)))
              (delete-size (seq-length (plist-get plan :delete)))
@@ -411,7 +411,6 @@ element and value its hash."
   compiler
   target-abs
   target-rel
-  target-hash
   soft-deps
   hard-deps)
 
@@ -429,8 +428,8 @@ element and value its hash."
 
 
 
-(defun porg-build-input (project cache)
-  "Calculate input data for the PROJECT with CACHE.
+(defun porg-build-input (project)
+  "Calculate input data for the PROJECT.
 
 Result is a table, where key is note id and the value is `porg-item'.
 
@@ -477,11 +476,6 @@ Throws a user error if any of the input has no matching rule."
                     :compiler compiler
                     :target-abs target-abs
                     :target-rel target-rel
-                    :target-hash (when (and target-abs (file-exists-p target-abs))
-                                   (or
-                                    (porg-cache-query cache (porg-rule-output-id it)
-                                                      #'porg-cache-item-hash)
-                                    (porg-sha1sum target-abs)))
                     :hard-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
                                       (porg-rule-output-hard-deps it))
                     :soft-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
