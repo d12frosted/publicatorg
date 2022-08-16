@@ -505,7 +505,7 @@ Throws a user error if any of the input has no matching rule."
       (-each missing
         (lambda (item)
           (porg-log "missing hard dependencies of %s:" (funcall describe item))
-          (--each (--filter (gethash it tbl) (porg-item-hard-deps item))
+          (--each (--remove (gethash it tbl) (porg-item-hard-deps item))
             (porg-log "- %s" (funcall describe it)))))
       (user-error "Missing some hard dependencies, see above"))
 
