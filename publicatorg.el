@@ -335,7 +335,10 @@ element and value its hash."
              it
              compiler-name
              (porg-cache-item-output cached))
-            (funcall (porg-compiler-clean compiler) cached (porg-project-root project))))
+            (funcall (porg-compiler-clean compiler)
+                     (expand-file-name
+                      (porg-cache-item-output cached)
+                      (porg-project-root project)))))
 
         (porg-log-s "build")
         (unless (plist-get plan :build)
