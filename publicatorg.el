@@ -632,17 +632,22 @@ Result is a property list (:compile :delete)."
      (seq-reverse (org-element-map (org-element-parse-buffer) 'headline #'identity)))
     (save-buffer)))
 
-(cl-defun porg-clean-links-in-buffer (&key sanitize-id-fn sanitize-attachment-fn)
+(cl-defun porg-clean-links-in-buffer (&key sanitize-id-fn
+                                           sanitize-attachment-fn
+                                           sanitize-file-fn)
   "Clean links in current buffer.
 
 Each link in the buffer is modified based on its type.
 
-If it's ID link, then it's kept as as link unconditionally.
+If it's ID link, then it's kept as link unconditionally.
 SANITIZE-ID-FN is called with link to allow custom modifications.
 
 If it's ATTACHMENT link, then it's kept as link unconditionally.
 SANITIZE-ATTACHMENT-FN is called with link to allow custom
 modifications.
+
+If it's FILE link, then it's kept as link unconditionally.
+SANITIZE-FILE-FN is called with link to allow custom modifications.
 
 If it's HTTPS link, then it's kept as is without modifications.
 
@@ -650,21 +655,24 @@ All other links are transformed to plain text."
   (-> (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
       (--each
           (org-ml-update
-            (lambda (link)
-              (let ((type (org-ml-get-property :type link)))
-                (cond
-                 ((seq-contains-p '("https") type) link)
+           (lambda (link)
+             (let ((type (org-ml-get-property :type link)))
+               (cond
+                ((seq-contains-p '("https") type) link)
 
-                 ((string-equal type "attachment")
-                  (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
+                ((string-equal type "attachment")
+                 (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
 
-                 ((string-equal type "id")
-                  (if sanitize-id-fn (funcall sanitize-id-fn link) link))
+                ((string-equal type "file")
+                 (if sanitize-file-fn (funcall sanitize-file-fn link) link))
 
-                 (t (org-ml-from-string
-                     'plain-text
-                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
-            it))))
+                ((string-equal type "id")
+                 (if sanitize-id-fn (funcall sanitize-id-fn link) link))
+
+                (t (org-ml-from-string
+                    'plain-text
+                    (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
+           it))))
 
 
 
