@@ -197,7 +197,9 @@ attachment name and returns a string. For example, this can be
 used to copy attachments to different destinations based on their
 type.
 
-FILE-MOD allows to modify output file name.
+FILE-MOD allows to modify output file name. It can be either a
+function or a list of functions. In the latter case one
+attachment can have multiple outputs.
 
 FILTER controls which attachments get copied, it's a function that
 takes attachment name and returns non-nil if attachment should be
@@ -221,12 +223,19 @@ OWNER allows to steal attachments of one NOTE to another OWNER."
                        (--map
                         (let* ((dir (if (functionp dir) (funcall dir it) dir))
                                (newname (concat (file-name-as-directory dir) it))
-                               (newname (if file-mod (funcall file-mod newname) newname)))
-                          (porg-rule-output
-                           :id (concat (vulpea-note-id (or owner note)) ":" it)
-                           :type "attachment"
-                           :item (expand-file-name it (vulpea-note-attach-dir a))
-                           :file newname))))))))
+                               (newnames (cond
+                                          ((null file-mod) (list newname))
+                                          ((functionp file-mod) (list (funcall file-mod newname)))
+                                          ((listp file-mod) (--map (funcall it newname) file-mod)))))
+                          (-map
+                           (lambda (newname)
+                             (porg-rule-output
+                              :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
+                              :type "attachment"
+                              :item (expand-file-name it (vulpea-note-attach-dir a))
+                              :file newname))
+                           newnames)))
+                       (-flatten))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
