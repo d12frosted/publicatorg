@@ -88,10 +88,9 @@
    (porg-item-target-abs item)
    t))
 
-(defun porg-test-clean-item (cache-item root)
-  "Clean CACHE-ITEM from ROOT."
-  (delete-file
-   (expand-file-name (porg-cache-item-output cache-item) root)))
+(defun porg-test-clean-item (file)
+  "Clean FILE."
+  (delete-file file))
 
 
 
