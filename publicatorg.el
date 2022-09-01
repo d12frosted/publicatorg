@@ -649,7 +649,7 @@ modifications.
 If it's FILE link, then it's kept as link unconditionally.
 SANITIZE-FILE-FN is called with link to allow custom modifications.
 
-If it's HTTPS link, then it's kept as is without modifications.
+If it's HTTPS or MAILTO link, then it's kept as is without modifications.
 
 All other links are transformed to plain text."
   (-> (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
@@ -659,6 +659,7 @@ All other links are transformed to plain text."
              (let ((type (org-ml-get-property :type link)))
                (cond
                 ((seq-contains-p '("https") type) link)
+                ((seq-contains-p '("mailto") type) link)
 
                 ((string-equal type "attachment")
                  (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
