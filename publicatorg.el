@@ -309,6 +309,37 @@ element and value its hash."
 
 
 
+(defmacro porg-benchmark-run (n fn &optional to-str &rest args)
+  "Benchmark FN by running it N times with ARGS.
+
+It also prints some possibly useful information. Result of the
+last FN evaluation is converted to string using provided TO-STR
+function.
+
+Return a list of the last FN evaluation result, the total elapsed
+time for execution, the number of garbage collections that ran,
+and the time taken by garbage collection. See also
+`benchmark-run-compiled'."
+  (declare (indent 1) (debug t))
+  `(let* ((v)
+          (result)
+          (name (if (symbolp ,fn)
+                    (symbol-name ,fn)
+                  "*lambda*")))
+    (porg-debug "[%s] begin benchmark with %s invocations"
+     name ,n)
+    (setq result
+     (benchmark-run ,n
+      (setq v (funcall ,fn ,@args))))
+    (porg-debug "[%s] benchmark result is %s after %s invocations%s"
+     name result ,n
+     (if ,to-str
+         (concat " => " (string-from (funcall ,to-str v)))
+       ""))
+    v))
+
+
+
 ;;;###autoload
 (defun porg-run (name)
   "Export project with NAME."
@@ -320,10 +351,10 @@ element and value its hash."
       (porg-log "loading cache")
       (let* ((cache-file (expand-file-name (porg-project-cache-file project)
                                            (porg-project-root project)))
-             (cache (porg-cache-load cache-file))
+             (cache (porg-benchmark-run 1 #'porg-cache-load nil cache-file))
              (describe (porg-project-describe project))
-             (items (porg-build-items project))
-             (plan (porg-build-plan project items cache))
+             (items (porg-benchmark-run 1 #'porg-build-items nil project))
+             (plan (porg-benchmark-run 1 #'porg-build-plan nil project items cache))
              (build-size (seq-length (plist-get plan :build)))
              (delete-size (seq-length (plist-get plan :delete)))
              (batch-rules (-filter #'porg-batch-rule-p
