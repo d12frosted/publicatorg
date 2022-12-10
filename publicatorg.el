@@ -277,8 +277,11 @@ based on FILTER), target file, input (as calculated by
 (cl-defstruct (porg-cache-item (:constructor porg-cache-item-create))
   (hash nil :type string)
   (output nil :type string)
+  (project-hash nil :type string)
   (rule nil :type string)
-  (compiler nil :type string))
+  (rule-hash nil :type string)
+  (compiler nil :type string)
+  (compiler-hash nil :type string))
 
 (cl-defun porg-cache-query (cache id access)
   "Query CACHE for ID by ACCESS."
@@ -358,7 +361,8 @@ and the time taken by garbage collection. See also
              (build-size (seq-length (plist-get plan :build)))
              (delete-size (seq-length (plist-get plan :delete)))
              (batch-rules (-filter #'porg-batch-rule-p
-                                   (porg-project-rules project))))
+                                   (porg-project-rules project)))
+             (project-hash (porg-project-hash project 'ignore-rules)))
 
         (porg-log-s "cleanup")
         (unless (plist-get plan :delete)
@@ -378,20 +382,37 @@ and the time taken by garbage collection. See also
             (funcall (porg-compiler-clean compiler)
                      (expand-file-name
                       (porg-cache-item-output cached)
-                      (porg-project-root project)))))
+                      (porg-project-root project)))
+            (remhash it cache)
+            ;; not the most effective way, but allows to decrease amount of work in case of failures
+            (porg-cache-write cache-file cache)))
 
         (porg-log-s "build")
         (unless (plist-get plan :build)
           (porg-log "Nothing to build, everything is up to date."))
         (--each-indexed (plist-get plan :build)
-          (let ((item (gethash it items)))
+          (let* ((item (gethash it items))
+                 (rule (porg-item-rule item))
+                 (compiler (porg-item-compiler item)))
             (porg-log
              "[%s/%s] building %s"
              (porg-string-from-number (+ 1 it-index) :padding-num build-size)
              build-size
              (funcall describe item))
-            (when-let ((build (porg-compiler-build (porg-item-compiler item))))
-              (funcall build item items cache))))
+            (when-let ((build (porg-compiler-build compiler)))
+              (funcall build item items cache))
+            (puthash (porg-item-id item)
+                     (porg-cache-item-create
+                      :hash (porg-item-hash item)
+                      :output (porg-item-target-rel item)
+                      :project-hash project-hash
+                      :rule (porg-rule-name rule)
+                      :rule-hash (porg-sha1sum rule)
+                      :compiler (porg-compiler-name compiler)
+                      :compiler-hash (porg-sha1sum compiler))
+                     cache)
+            ;; not the most effective way, but allows to decrease amount of work in case of failures
+            (porg-cache-write cache-file cache)))
 
         (porg-log-s "run batch actions")
         (unless batch-rules
@@ -414,31 +435,7 @@ and the time taken by garbage collection. See also
              size)
             (funcall (porg-batch-rule-publish it) target items-selected items cache)))
 
-        (porg-log-s "cache build files")
-        (puthash (concat "project:" name)
-                 (porg-cache-item-create :hash (porg-project-hash project 'ignore-rules))
-                 cache)
-        (--each (-filter #'porg-rule-p (porg-project-rules project))
-          (puthash (concat "rule:" (porg-rule-name it))
-                   (porg-cache-item-create :hash (porg-sha1sum it))
-                   cache))
-        (--each (porg-project-compilers project)
-          (puthash (concat "compiler:" (porg-compiler-name it))
-                   (porg-cache-item-create :hash (porg-sha1sum it))
-                   cache))
-        (--each (plist-get plan :delete)
-          (remhash it cache))
-        (--each (plist-get plan :build)
-          (let* ((item (gethash it items)))
-            (puthash (porg-item-id item)
-                     (porg-cache-item-create
-                      :hash (porg-item-hash item)
-                      :output (porg-item-target-rel item)
-                      :rule (porg-rule-name (porg-item-rule item))
-                      :compiler (porg-compiler-name (porg-item-compiler item)))
-                     cache)))
         (porg-cache-write cache-file cache)
-
         (porg-log "The work is done! Enjoy your published vulpea notes!")
         (porg-log "        ٩(^ᴗ^)۶")))))
 
@@ -562,83 +559,72 @@ Throws a user error if any of the input has no matching rule."
 Result is a property list (:compile :delete)."
   (let* ((describe (porg-project-describe project))
          (project-hash (porg-project-hash project 'ignore-rules))
-         (project-updated (not (string-equal
-                                project-hash
-                                (porg-cache-query
-                                 cache (concat "project:" (porg-project-name project))
-                                 #'porg-cache-item-hash))))
          (build
-          (if project-updated
-              (hash-table-keys items)
-            (-filter
-             (lambda (id)
-               (let* ((item (gethash id items))
-                      (rule (porg-item-rule item))
-                      (compiler (porg-item-compiler item)))
-                 (or
-                  ;; rule changed
-                  (let ((res (not
-                              (string-equal
-                               (porg-sha1sum rule)
-                               (porg-cache-query
-                                cache (concat "rule:" (porg-rule-name rule))
-                                #'porg-cache-item-hash)))))
-                    (when res (porg-debug "%s: rule %s changed"
-                                          (funcall describe item)
-                                          (porg-rule-name rule)))
-                    res)
-                  ;; compiler changed
-                  (let ((res (not
-                              (string-equal
-                               (porg-sha1sum compiler)
-                               (porg-cache-query
-                                cache (concat "compiler:" (porg-compiler-name compiler))
-                                #'porg-cache-item-hash)))))
-                    (when res (porg-debug "%s: compiler %s changed"
-                                          (funcall describe item)
-                                          (porg-compiler-name compiler)))
-                    res)
-                  ;; item itself is changed
-                  (let ((res (not
-                              (string-equal
-                               (porg-item-hash item)
-                               (porg-cache-query cache id #'porg-cache-item-hash)))))
-                    (when res (porg-debug "%s: content changed" (funcall describe item)))
-                    res)
+          (-filter
+           (lambda (id)
+             (let* ((item (gethash id items))
+                    (cache-item (gethash id cache))
+                    (rule (porg-item-rule item))
+                    (compiler (porg-item-compiler item)))
+               (or
+                ;; no cache information
+                (not cache-item)
 
-                  ;; item has moved (might happen without change in the item itself)
-                  (let ((res (not
-                              (string-equal
-                               (porg-item-target-rel item)
-                               (porg-cache-query cache id #'porg-cache-item-output)))))
-                    (when res (porg-debug "%s: target changed" (funcall describe item)))
-                    res)
+                ;; project changed
+                (let ((res (not (string-equal project-hash (porg-cache-item-project-hash cache-item)))))
+                  (when res (porg-debug "%s: project changed" (funcall describe item)))
+                  res)
 
-                  ;; one of the deps is changed
-                  (-any-p
-                   (lambda (a-id)
-                     (let ((a (gethash a-id items)))
-                       (let ((res (if a
-                                      ;; changed
-                                      (not (string-equal (porg-item-hash a)
-                                                         (porg-cache-query cache a-id #'porg-cache-item-hash)))
-                                    ;; removed
-                                    (porg-cache-query cache a-id #'porg-cache-item-hash))))
-                         (when res
-                           (porg-debug "%s: dependency %s changed"
-                                       (funcall describe item)
-                                       (if a (funcall describe a) a-id)))
-                         res)))
-                   (porg-item-deps item)))))
-             (hash-table-keys items))))
+                ;; rule changed
+                (let ((res (not (string-equal (porg-sha1sum rule)
+                                              (porg-cache-item-rule-hash cache-item)))))
+                  (when res (porg-debug "%s: rule %s changed"
+                                        (funcall describe item)
+                                        (porg-rule-name rule)))
+                  res)
+                ;; compiler changed
+                (let ((res (not (string-equal (porg-sha1sum compiler)
+                                              (porg-cache-item-compiler-hash cache-item)))))
+                  (when res (porg-debug "%s: compiler %s changed"
+                                        (funcall describe item)
+                                        (porg-compiler-name compiler)))
+                  res)
+                ;; item itself is changed
+                (let ((res (not (string-equal (porg-item-hash item)
+                                              (porg-cache-item-hash cache-item)))))
+                  (when res (porg-debug "%s: content changed" (funcall describe item)))
+                  res)
+
+                ;; item has moved (might happen without change in the item itself)
+                (let ((res (not
+                            (string-equal
+                             (porg-item-target-rel item)
+                             (porg-cache-query cache id #'porg-cache-item-output)))))
+                  (when res (porg-debug "%s: target changed" (funcall describe item)))
+                  res)
+
+                ;; one of the deps is changed
+                (-any-p
+                 (lambda (a-id)
+                   (let ((a (gethash a-id items)))
+                     (let ((res (if a
+                                    ;; changed
+                                    (not (string-equal (porg-item-hash a)
+                                                       (porg-cache-query cache a-id #'porg-cache-item-hash)))
+                                  ;; removed
+                                  (porg-cache-query cache a-id #'porg-cache-item-hash))))
+                       (when res
+                         (porg-debug "%s: dependency %s changed"
+                                     (funcall describe item)
+                                     (if a (funcall describe a) a-id)))
+                       res)))
+                 (porg-item-deps item)))))
+           (hash-table-keys items)))
          (delete (--remove
-                  (or (when-let* ((item (gethash it items)))
-                        (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
-                            (string-equal target-old (porg-item-target-rel item))
-                          item))
-                      (s-prefix-p "project:" it)
-                      (s-prefix-p "rule:" it)
-                      (s-prefix-p "compiler:" it))
+                  (when-let* ((item (gethash it items)))
+                    (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
+                        (string-equal target-old (porg-item-target-rel item))
+                      item))
                   (hash-table-keys cache))))
 
     (porg-log "found %s items to compile." (seq-length build))
@@ -821,7 +807,7 @@ OBJ can be either a note, a file or a Lisp object."
   "Return the decimal representation of NUM as string.
 
 When MIN-LENGTH is specified, the result is padded on the left
-with PADDING, which can be either 'zero or 'soace (default).
+with PADDING, which can be either \\'zero or \\'soace (default).
 
 Padding also happens when PADDING-NUM is specified, in that case
  MIN-LENGTH equals to the length of decimal representation of
