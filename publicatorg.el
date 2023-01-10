@@ -559,67 +559,81 @@ Throws a user error if any of the input has no matching rule."
 Result is a property list (:compile :delete)."
   (let* ((describe (porg-project-describe project))
          (project-hash (porg-project-hash project 'ignore-rules))
-         (build
-          (-filter
-           (lambda (id)
-             (let* ((item (gethash id items))
-                    (cache-item (gethash id cache))
-                    (rule (porg-item-rule item))
-                    (compiler (porg-item-compiler item)))
-               (or
-                ;; no cache information
-                (not cache-item)
+         (build-map (let ((tbl (make-hash-table :test 'equal
+                                                :size (hash-table-size items))))
+                      (--each (hash-table-keys items)
+                        (let* ((item (gethash it items))
+                               (cache-item (gethash it cache))
+                               (rule (porg-item-rule item))
+                               (compiler (porg-item-compiler item)))
+                          (puthash
+                           it
+                           (or
+                            ;; no cache information
+                            (not cache-item)
 
-                ;; project changed
-                (let ((res (not (string-equal project-hash (porg-cache-item-project-hash cache-item)))))
-                  (when res (porg-debug "%s: project changed" (funcall describe item)))
-                  res)
+                            ;; project changed
+                            (let ((res (not (string-equal project-hash (porg-cache-item-project-hash cache-item)))))
+                              (when res (porg-debug "%s: project changed" (funcall describe item)))
+                              res)
 
-                ;; rule changed
-                (let ((res (not (string-equal (porg-sha1sum rule)
-                                              (porg-cache-item-rule-hash cache-item)))))
-                  (when res (porg-debug "%s: rule %s changed"
-                                        (funcall describe item)
-                                        (porg-rule-name rule)))
-                  res)
-                ;; compiler changed
-                (let ((res (not (string-equal (porg-sha1sum compiler)
-                                              (porg-cache-item-compiler-hash cache-item)))))
-                  (when res (porg-debug "%s: compiler %s changed"
-                                        (funcall describe item)
-                                        (porg-compiler-name compiler)))
-                  res)
-                ;; item itself is changed
-                (let ((res (not (string-equal (porg-item-hash item)
-                                              (porg-cache-item-hash cache-item)))))
-                  (when res (porg-debug "%s: content changed" (funcall describe item)))
-                  res)
+                            ;; rule changed
+                            (let ((res (not (string-equal (porg-sha1sum rule)
+                                                          (porg-cache-item-rule-hash cache-item)))))
+                              (when res (porg-debug "%s: rule %s changed"
+                                                    (funcall describe item)
+                                                    (porg-rule-name rule)))
+                              res)
+                            ;; compiler changed
+                            (let ((res (not (string-equal (porg-sha1sum compiler)
+                                                          (porg-cache-item-compiler-hash cache-item)))))
+                              (when res (porg-debug "%s: compiler %s changed"
+                                                    (funcall describe item)
+                                                    (porg-compiler-name compiler)))
+                              res)
+                            ;; item itself is changed
+                            (let ((res (not (string-equal (porg-item-hash item)
+                                                          (porg-cache-item-hash cache-item)))))
+                              (when res (porg-debug "%s: content changed" (funcall describe item)))
+                              res)
 
-                ;; item has moved (might happen without change in the item itself)
-                (let ((res (not
-                            (string-equal
-                             (porg-item-target-rel item)
-                             (porg-cache-query cache id #'porg-cache-item-output)))))
-                  (when res (porg-debug "%s: target changed" (funcall describe item)))
-                  res)
+                            ;; item has moved (might happen without change in the item itself)
+                            (let ((res (not
+                                        (string-equal
+                                         (porg-item-target-rel item)
+                                         (porg-cache-query cache it #'porg-cache-item-output)))))
+                              (when res (porg-debug "%s: target changed" (funcall describe item)))
+                              res)
 
-                ;; one of the deps is changed
-                (-any-p
-                 (lambda (a-id)
-                   (let ((a (gethash a-id items)))
-                     (let ((res (if a
-                                    ;; changed
-                                    (not (string-equal (porg-item-hash a)
-                                                       (porg-cache-query cache a-id #'porg-cache-item-hash)))
-                                  ;; removed
-                                  (porg-cache-query cache a-id #'porg-cache-item-hash))))
-                       (when res
-                         (porg-debug "%s: dependency %s changed"
-                                     (funcall describe item)
-                                     (if a (funcall describe a) a-id)))
-                       res)))
-                 (porg-item-deps item)))))
-           (hash-table-keys items)))
+                            ;; one of the deps is changed
+                            (-any-p
+                             (lambda (a-id)
+                               (let ((a (gethash a-id items)))
+                                 (let ((res (if a
+                                                ;; changed
+                                                (not (string-equal (porg-item-hash a)
+                                                                   (porg-cache-query cache a-id #'porg-cache-item-hash)))
+                                              ;; removed
+                                              (porg-cache-query cache a-id #'porg-cache-item-hash))))
+                                   (when res
+                                     (porg-debug "%s: dependency %s changed"
+                                                 (funcall describe item)
+                                                 (if a (funcall describe a) a-id)))
+                                   res)))
+                             (porg-item-deps item)))
+                           tbl)))
+                      tbl))
+         (build-raw (-filter (lambda (it) (gethash it build-map))
+                             (hash-table-keys build-map)))
+         (build-sorted (porg-topological-sort
+                        (--map
+                         (cons it (porg-item-hard-deps (gethash it items)))
+                         build-raw)
+                        :test 'equal))
+         (build (if (nth 1 build-sorted)
+                    (-filter (lambda (it) (gethash it build-map)) (car build-sorted))
+                  (porg-log "Can't sort topologically by hard dependencies due to cycles.")
+                  build-raw))
          (delete (--remove
                   (when-let* ((item (gethash it items)))
                     (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
@@ -825,6 +839,64 @@ This function might be considered an overkill, but it's used in
                   (concat "%" l ".d"))
                 num))
     (number-to-string num)))
+
+
+
+;;
+;; topological sort, see
+;; https://rosettacode.org/wiki/Topological_sort#Common_Lisp
+;;
+(cl-defun porg-topological-sort (graph &key (test 'eql))
+  "Return a list of topologically ordered elements of GRAPH.
+
+GRAPH is an association list whose keys are objects and whose
+values are lists of objects on which the corresponding key depends.
+TEST is used to compare elements, and should be a suitable test for
+hash-tables.
+
+Topological-sort returns two values. The first is a
+list of objects sorted toplogically. The second is a boolean
+indicating whether all of the objects in the input graph are present
+in the topological ordering (i.e., the first value)."
+  (let* ((entries (make-hash-table :test test))
+         ;; avoid obsolete `flet' & backward-incompatible `cl-flet'
+         (entry (lambda (v)
+                  "Return the entry for vertex.  Each entry is a cons whose
+              car is the number of outstanding dependencies of vertex
+              and whose cdr is a list of dependants of vertex."
+                  (or (gethash v entries)
+                      (puthash v (cons 0 '()) entries)))))
+    ;; populate entries initially
+    (dolist (gvertex graph)
+      (cl-destructuring-bind (vertex &rest dependencies) gvertex
+        (let ((ventry (funcall entry vertex)))
+          (dolist (dependency dependencies)
+            (let ((dentry (funcall entry dependency)))
+              (unless (funcall test dependency vertex)
+                (cl-incf (car ventry))
+                (push vertex (cdr dentry))))))))
+    ;; L is the list of sorted elements, and S the set of vertices
+    ;; with no outstanding dependencies.
+    (let ((L '())
+          (S (cl-loop for entry being each hash-value of entries
+                      using (hash-key vertex)
+                      when (zerop (car entry)) collect vertex)))
+      ;; Until there are no vertices with no outstanding dependencies,
+      ;; process vertices from S, adding them to L.
+      (cl-do* () ((cl-endp S))
+        (let* ((v (pop S)) (ventry (funcall entry v)))
+          (remhash v entries)
+          (dolist (dependant (cdr ventry) (push v L))
+            (when (zerop (cl-decf (car (funcall entry dependant))))
+              (push dependant S)))))
+      ;; return (1) the list of sorted items, (2) whether all items
+      ;; were sorted, and (3) if there were unsorted vertices, the
+      ;; hash table mapping these vertices to their dependants
+      (let ((all-sorted-p (zerop (hash-table-count entries))))
+        (cl-values (nreverse L)
+                   all-sorted-p
+                   (unless all-sorted-p
+                     entries))))))
 
 
 
