@@ -244,14 +244,14 @@ plist (:variant)."
                        :file newname)
                       (-map
                        (lambda (variant)
-                         (let ((suffix (concat "@" (number-to-string variant))))
-                           (porg-rule-output
-                            :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname) suffix)
-                            :type "attachment"
-                            :item (expand-file-name it (vulpea-note-attach-dir a))
-                            :file (concat (file-name-directory newname)
-                                          (file-name-base newname) suffix "." (file-name-extension newname))
-                            :extra-args `(:variant ,variant))))
+                         (porg-rule-output
+                          :id (concat (vulpea-note-id (or owner note)) ":"
+                                      (file-name-nondirectory newname)
+                                      "@" (number-to-string variant))
+                          :type "attachment"
+                          :item (expand-file-name it (vulpea-note-attach-dir a))
+                          :file (porg-file-name-set-variant newname variant)
+                          :extra-args `(:variant ,variant)))
                        variants)))
                    newnames)))
                (-flatten))))))
@@ -918,6 +918,19 @@ in the topological ordering (i.e., the first value)."
                    all-sorted-p
                    (unless all-sorted-p
                      entries))))))
+
+
+
+(defun porg-file-name-set-variant (file variant)
+  "Add VARIANT to FILE."
+  (let ((variant (cond
+                  ((numberp variant) (number-to-string variant))
+                  ((stringp variant) variant)
+                  (t (user-error "Unsupported variant type: %s" variant)))))
+    (concat (file-name-directory file)
+            (file-name-base file)
+            "@" variant
+            "." (file-name-extension file))))
 
 
 
