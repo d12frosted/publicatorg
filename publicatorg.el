@@ -169,7 +169,8 @@ dependencies declare what notes are required to build this rule."
   (item nil :read-only t)
   (file nil :read-only t :type string)
   (hard-deps nil :read-only t :type function)
-  (soft-deps nil :read-only t :type function))
+  (soft-deps nil :read-only t :type function)
+  (extra-args nil :read-only t))
 
 (cl-defun porg-note-output (note &key file soft-deps hard-deps)
   "Make an output for NOTE.
@@ -189,7 +190,7 @@ In addition, SOFT-DEPS are concatenated with list all linked notes."
                  (--filter (string-equal "id" (car it)))
                  (--map (cdr it))))))
 
-(cl-defun porg-attachments-output (note &key dir file-mod filter owner)
+(cl-defun porg-attachments-output (note &key dir file-mod filter owner variants)
   "Make an list of attachments output for NOTE.
 
 DIR can be either a string or a function that takes
@@ -205,7 +206,12 @@ FILTER controls which attachments get copied, it's a function that
 takes attachment name and returns non-nil if attachment should be
 copied. When FILTER-FN is not provided, all attachments are copied.
 
-OWNER allows to steal attachments of one NOTE to another OWNER."
+OWNER allows to steal attachments of one NOTE to another OWNER.
+
+VARIANTS is a list of output alternatives. By each attachment has
+one default output (with no extra args) and extra output for each
+variant, which is passed as extra args in form of a
+plist (:variant)."
   (->> note
        (vulpea-note-path)
        (org-roam-db-query
@@ -214,28 +220,41 @@ OWNER allows to steal attachments of one NOTE to another OWNER."
          :where (= $s1 file)])
        (-map #'car)
        (vulpea-db-query-by-ids)
-       (-mapcat (lambda (a)
-                  (->> a
-                       (vulpea-note-links)
-                       (--filter (and (string-equal (car it) "attachment")
-                                      (or (not filter) (funcall filter (cdr it)))))
-                       (--map (cdr it))
-                       (--map
-                        (let* ((dir (if (functionp dir) (funcall dir it) dir))
-                               (newname (concat (file-name-as-directory dir) it))
-                               (newnames (cond
-                                          ((null file-mod) (list newname))
-                                          ((functionp file-mod) (list (funcall file-mod newname)))
-                                          ((listp file-mod) (--map (funcall it newname) file-mod)))))
-                          (-map
-                           (lambda (newname)
-                             (porg-rule-output
-                              :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
-                              :type "attachment"
-                              :item (expand-file-name it (vulpea-note-attach-dir a))
-                              :file newname))
-                           newnames)))
-                       (-flatten))))))
+       (-mapcat
+        (lambda (a)
+          (->> a
+               (vulpea-note-links)
+               (--filter (and (string-equal (car it) "attachment")
+                              (or (not filter) (funcall filter (cdr it)))))
+               (--map (cdr it))
+               (--mapcat
+                (let* ((dir (if (functionp dir) (funcall dir it) dir))
+                       (newname (concat (file-name-as-directory dir) it))
+                       (newnames (cond
+                                  ((null file-mod) (list newname))
+                                  ((functionp file-mod) (list (funcall file-mod newname)))
+                                  ((listp file-mod) (--map (funcall it newname) file-mod)))))
+                  (-map
+                   (lambda (newname)
+                     (cons
+                      (porg-rule-output
+                       :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
+                       :type "attachment"
+                       :item (expand-file-name it (vulpea-note-attach-dir a))
+                       :file newname)
+                      (-map
+                       (lambda (variant)
+                         (let ((suffix (concat "@" (number-to-string variant))))
+                           (porg-rule-output
+                            :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname) suffix)
+                            :type "attachment"
+                            :item (expand-file-name it (vulpea-note-attach-dir a))
+                            :file (concat (file-name-directory newname)
+                                          (file-name-base newname) suffix "." (file-name-extension newname))
+                            :extra-args `(:variant ,variant))))
+                       variants)))
+                   newnames)))
+               (-flatten))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
@@ -452,7 +471,8 @@ and the time taken by garbage collection. See also
   target-abs
   target-rel
   soft-deps
-  hard-deps)
+  hard-deps
+  extra-args)
 
 (cl-defmethod porg-item-deps ((item porg-item))
   "Return dependencies of ITEM."
@@ -519,7 +539,8 @@ Throws a user error if any of the input has no matching rule."
                     :hard-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
                                       (porg-rule-output-hard-deps it))
                     :soft-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
-                                      (porg-rule-output-soft-deps it)))
+                                      (porg-rule-output-soft-deps it))
+                    :extra-args (porg-rule-output-extra-args it))
                    tbl))
               (setf without-compiler (cons it without-compiler))))
         (setf without-rule (cons it without-rule))))
