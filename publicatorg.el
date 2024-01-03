@@ -326,8 +326,8 @@ element and value its hash."
   "Write build CACHE to FILE."
   (with-temp-file file
     (let ((print-level nil)
-	        (print-length nil))
-	    (print cache (current-buffer)))))
+	  (print-length nil))
+      (pp cache (current-buffer)))))
 
 
 
