@@ -398,10 +398,11 @@ and the time taken by garbage collection. See also
              it
              compiler-name
              (porg-cache-item-output cached))
-            (funcall (porg-compiler-clean compiler)
-                     (expand-file-name
-                      (porg-cache-item-output cached)
-                      (porg-project-root project)))
+            (when (porg-compiler-clean compiler)
+              (funcall (porg-compiler-clean compiler)
+                       (expand-file-name
+                        (porg-cache-item-output cached)
+                        (porg-project-root project))))
             (remhash it cache)
             ;; not the most effective way, but allows to decrease amount of work in case of failures
             (porg-cache-write cache-file cache)))
