@@ -41,6 +41,7 @@
 
 
 (defvar porg--projects nil)
+(defvar porg-enable-cleanup t)
 
 (cl-defgeneric porg-describe (thing)
   "Describe THING.")
@@ -420,26 +421,27 @@ and the time taken by garbage collection. See also
         (porg-log-s "cleanup")
         (unless (plist-get plan :delete)
           (porg-log "Nothing to delete, everything is used."))
-        (--each-indexed (plist-get plan :delete)
-          (let* ((cached (gethash it cache))
-                 (compiler-name (porg-cache-item-compiler cached))
-                 (compiler (--find (string-equal compiler-name (porg-compiler-name it))
-                                   (porg-project-compilers project))))
-            (porg-log
-             "[%s/%s] cleaning %s using %s rule from %s"
-             (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
-             delete-size
-             it
-             compiler-name
-             (porg-cache-item-output cached))
-            (when (porg-compiler-clean compiler)
-              (funcall (porg-compiler-clean compiler)
-                       (expand-file-name
-                        (porg-cache-item-output cached)
-                        (porg-project-root project))))
-            (remhash it cache)
-            ;; not the most effective way, but allows to decrease amount of work in case of failures
-            (porg-cache-write cache-file cache)))
+        (when porg-enable-cleanup
+          (--each-indexed (plist-get plan :delete)
+            (when-let* ((cached (gethash it cache))
+                        (compiler-name (porg-cache-item-compiler cached))
+                        (compiler (--find (string-equal compiler-name (porg-compiler-name it))
+                                          (porg-project-compilers project))))
+              (porg-log
+               "[%s/%s] cleaning %s using %s rule from %s"
+               (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
+               delete-size
+               it
+               compiler-name
+               (porg-cache-item-output cached))
+              (when (porg-compiler-clean compiler)
+                (funcall (porg-compiler-clean compiler)
+                         (expand-file-name
+                          (porg-cache-item-output cached)
+                          (porg-project-root project))))
+              (remhash it cache)
+              ;; not the most effective way, but allows to decrease amount of work in case of failures
+              (porg-cache-write cache-file cache))))
 
         (porg-log-s "build")
         (unless (plist-get plan :build)
