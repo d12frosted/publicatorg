@@ -293,6 +293,17 @@ based on FILTER), target file, input (as calculated by
 
 
 
+(defvar porg-cache-method 'pp
+  "Cache method.
+
+Can be one of:
+
+- `pp', i.e. pretty print as Lisp object, which human and git-friendly;
+  but might be very slow with big amount of data;
+ - `prin1' - serialize as Lisp object, very fast, but not human and
+   git-friendly as whole object is persisted as one line;
+- json - serialize as JSON.")
+
 (cl-defstruct (porg-cache-item (:constructor porg-cache-item-create))
   (hash nil :type string)
   (output nil :type string)
@@ -313,21 +324,44 @@ based on FILTER), target file, input (as calculated by
 Return a hash table, where key is some string id of the build
 element and value its hash."
   (if (file-exists-p file)
-      (with-temp-buffer
-        (condition-case nil
-	          (progn
-	            (insert-file-contents file)
-              (read (current-buffer)))
-	        (error
-	         (message "Could not read cache from %s" file))))
+      (pcase porg-cache-method
+        (`pp (with-temp-buffer
+               (condition-case nil
+	           (progn
+	             (insert-file-contents file)
+                     (read (current-buffer)))
+	         (error
+	          (message "Could not read cache from %s" file)))))
+        (`prin1 (with-temp-buffer
+                  (condition-case nil
+	              (progn
+	                (insert-file-contents file)
+                        (read (current-buffer)))
+	            (error
+	             (message "Could not read cache from %s" file)))))
+        (`json (with-temp-buffer
+                 (insert-file-contents file)
+                 (json-parse-buffer :object-type 'alist)))
+        (_ (user-error "Unsupported cache method: %s" porg-cache-method)))
     (make-hash-table :test 'equal)))
 
 (cl-defun porg-cache-write (file cache)
   "Write build CACHE to FILE."
-  (with-temp-file file
-    (let ((print-level nil)
-	  (print-length nil))
-      (pp cache (current-buffer)))))
+  (pcase porg-cache-method
+    (`pp (with-temp-file file
+           (let ((print-level nil)
+	         (print-length nil))
+             (pp cache (current-buffer)))))
+    (`prin1 (with-temp-file file
+              (let ((print-level nil)
+	            (print-length nil))
+                (prin1 cache (current-buffer)))))
+    (`json (let ((json-encoding-pretty-print t))
+             (json-encode cache))
+           ;; (with-temp-file file
+           ;;   (insert (json-encode cache)))
+           )
+    (_ (user-error "Unsupported cache method: %s" porg-cache-method))))
 
 
 
