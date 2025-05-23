@@ -5,7 +5,7 @@
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; Version: 0.1
-;; Package-Requires: ((emacs "29.1") (vulpea "0.3") (org-ml "5.8"))
+;; Package-Requires: ((emacs "29.1") (org-roam "2.2.2") (vulpea "0.3") (org-ml "5.8"))
 ;;
 ;; Created: 08 Jul 2022
 ;;
@@ -217,8 +217,8 @@ plist (:variant)."
        (vulpea-note-path)
        (org-roam-db-query
         [:select id
-         :from nodes
-         :where (= $s1 file)])
+                 :from nodes
+                 :where (= $s1 file)])
        (-map #'car)
        (vulpea-db-query-by-ids)
        (-mapcat
@@ -383,12 +383,12 @@ and the time taken by garbage collection. See also
           (name (if (symbolp ,fn)
                     (symbol-name ,fn)
                   "*lambda*")))
-    (porg-debug "[%s] begin benchmark with %s invocations"
+    (porg-log "[%s] begin benchmark with %s invocations"
      name ,n)
     (setq result
      (benchmark-run ,n
       (setq v (funcall ,fn ,@args))))
-    (porg-debug "[%s] benchmark result is %s after %s invocations%s"
+    (porg-log "[%s] benchmark result is %s after %s invocations%s"
      name result ,n
      (if ,to-str
          (concat " => " (string-from (funcall ,to-str v)))
@@ -451,9 +451,11 @@ and the time taken by garbage collection. See also
                  (rule (porg-item-rule item))
                  (compiler (porg-item-compiler item)))
             (porg-log
-             "[%s/%s] building %s"
+             "[%s/%s] (%s:%s) building %s"
              (porg-string-from-number (+ 1 it-index) :padding-num build-size)
              build-size
+             (porg-rule-name rule)
+             (porg-compiler-name compiler)
              (funcall describe item))
             (when-let ((build (porg-compiler-build compiler)))
               (funcall build item items cache))
@@ -538,28 +540,32 @@ Throws a user error if any of the input has no matching rule."
          (size (seq-length input))
          (without-rule nil)
          (without-compiler nil)
-         (tbl (make-hash-table :test 'equal :size size)))
+         (tbl (make-hash-table :test 'equal :size size))
+         (logf #'porg-debug))
 
     (porg-log "found %s notes to resolve." size)
 
     (--each input
-      (porg-debug "- outputs of %s:" (funcall describe it))
+      (if (porg-debug-input-p it)
+          (setq logf #'porg-log)
+        (setq logf #'porg-debug))
+      (funcall logf "- outputs of %s:" (funcall describe it))
       (if-let ((rule (porg-project-resolve-rule project it)))
           (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
                     (funcall outputs-fn it))
-            (porg-debug "  - %s" (funcall describe it))
+            (funcall logf "  - %s" (funcall describe it))
             (if-let ((compiler (porg-project-resolve-compiler project it)))
                 (let* ((target-rel (porg-rule-output-file it))
                        (target-abs (when target-rel
                                      (expand-file-name target-rel (porg-project-root project)))))
-                  (porg-debug "    - rel: %s" target-rel)
-                  (porg-debug "    - abs: %s" target-abs)
-                  (porg-debug "    - hard deps:")
+                  (funcall logf "    - rel: %s" target-rel)
+                  (funcall logf "    - abs: %s" target-abs)
+                  (funcall logf "    - hard deps:")
                   (--each (porg-rule-output-hard-deps it)
-                    (porg-debug "      - %s" (funcall describe it)))
-                  (porg-debug "    - soft deps:")
+                    (funcall logf "      - %s" (funcall describe it)))
+                  (funcall logf "    - soft deps:")
                   (--each (porg-rule-output-soft-deps it)
-                    (porg-debug "      - %s" (funcall describe it)))
+                    (funcall logf "      - %s" (funcall describe it)))
                   (puthash
                    (porg-rule-output-id it)
                    (porg-item-create
@@ -744,25 +750,25 @@ All other links are transformed to plain text."
   (-> (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
       (--each
           (org-ml-update
-           (lambda (link)
-             (let ((type (org-ml-get-property :type link)))
-               (cond
-                ((seq-contains-p '("https") type) link)
-                ((seq-contains-p '("mailto") type) link)
+            (lambda (link)
+              (let ((type (org-ml-get-property :type link)))
+                (cond
+                 ((seq-contains-p '("https") type) link)
+                 ((seq-contains-p '("mailto") type) link)
 
-                ((string-equal type "attachment")
-                 (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
+                 ((string-equal type "attachment")
+                  (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
 
-                ((string-equal type "file")
-                 (if sanitize-file-fn (funcall sanitize-file-fn link) link))
+                 ((string-equal type "file")
+                  (if sanitize-file-fn (funcall sanitize-file-fn link) link))
 
-                ((string-equal type "id")
-                 (if sanitize-id-fn (funcall sanitize-id-fn link) link))
+                 ((string-equal type "id")
+                  (if sanitize-id-fn (funcall sanitize-id-fn link) link))
 
-                (t (org-ml-from-string
-                    'plain-text
-                    (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
-           it))))
+                 (t (org-ml-from-string
+                     'plain-text
+                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
+            it))))
 
 
 
@@ -849,8 +855,8 @@ OBJ can be either a note, a file or a Lisp object."
     (caar
      (org-roam-db-query
       [:select hash
-       :from files
-       :where (= file $s1)]
+               :from files
+               :where (= file $s1)]
       (vulpea-note-path obj))))
 
    ((porg-rule-output-p obj)
@@ -865,8 +871,8 @@ OBJ can be either a note, a file or a Lisp object."
 
    (t (with-temp-buffer
         (let ((print-level nil)
-	            (print-length nil))
-	        (print obj (current-buffer))
+	      (print-length nil))
+	  (print obj (current-buffer))
           (secure-hash 'sha1 (current-buffer)))))))
 
 

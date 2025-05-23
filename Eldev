@@ -1,4 +1,4 @@
-; -*- mode: emacs-lisp; lexical-binding: t -*-
+;; -*- mode: emacs-lisp; lexical-binding: t -*-
 
 ;; Autodetermined by `eldev init'.
 (eldev-use-package-archive 'melpa)
@@ -6,8 +6,9 @@
 (eldev-use-plugin 'autoloads)
 
 (eldev-add-extra-dependencies 'test 'emacsql)
-(eldev-add-extra-dependencies 'test 'emacsql-sqlite)
-(eldev-add-extra-dependencies 'test 'emacsql-sqlite-builtin)
+
+(eldev-use-local-dependency (expand-file-name "vulpea" (or (getenv "PROJECTS_HOME")
+                                                           (expand-file-name "Developer" (getenv "HOME")))))
 
 
 ;; Linting configurations.
