@@ -74,11 +74,11 @@ ARGS are used to construct project."
     (unless (porg-project-rules project) (user-error "Missing `rules'"))
     (unless (porg-project-compilers project) (user-error "Missing `compilers'"))
     (setf (porg-project-compilers project)
-          (cons
+          (-snoc
+           (porg-project-compilers project)
            (porg-compiler
             :name "$$void$$"
-            :match (-rpartial #'porg-rule-output-that :type "$$void$$"))
-           (porg-project-compilers project)))
+            :match (-rpartial #'porg-rule-output-that :type "$$void$$"))))
     (if-let ((val (assoc name porg--projects)))
         (setf (cdr val) project)
       (setf porg--projects (cons (cons name project) porg--projects)))
