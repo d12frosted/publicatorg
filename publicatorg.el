@@ -968,6 +968,41 @@ in the topological ordering (i.e., the first value)."
             "." (file-name-extension file))))
 
 
+;; * JSON support
+
+(defun porg-struct-to-alist (struct)
+  "Convert STRUCT to an alist."
+  (let ((type (type-of struct)))
+    (append `((type . ,type))
+            (->> (cl-struct-slot-info type)
+                 (--map (cons (nth 0 it) (intern (format "%s-%s" type (nth 0 it)))))
+                 (--filter (functionp (cdr it)))
+                 (--map (cons (car it) (funcall (cdr it) struct)))
+                 (--remove (null (cdr it)))))))
+
+(defun porg-alist-to-struct (alist)
+  "Convert ALIST to a struct."
+  (let ((type (cdr (assoc 'type alist))))
+    ;; not sure how to get a constructor in generic way;
+    ;; but all porg structs use x-create convention
+    (apply (intern (format "%s-create" type))
+           (apply 'append
+                  (mapcar (lambda (pair)
+                            (unless (eq (car pair) 'type)
+                              (list (intern (format ":%s" (car pair))) (cdr pair))))
+                          alist)))))
+
+(defun porg-json-print-wrapper (orig-fun object)
+  "Wrapper for `json--print' that supports structs.
+
+If OBJECT is not a struct, it calls ORIG-FUN."
+  (if (cl-struct-p object)
+      (funcall orig-fun (porg-struct-to-alist object))
+    (funcall orig-fun object)))
+
+(advice-add 'json--print :around #'porg-json-print-wrapper)
+
+
 
 (provide 'publicatorg)
 ;;; publicatorg.el ends here
