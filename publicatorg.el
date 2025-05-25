@@ -5,7 +5,7 @@
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; Version: 0.1
-;; Package-Requires: ((emacs "29.1") (org-roam "2.2.2") (vulpea "0.3") (org-ml "5.8"))
+;; Package-Requires: ((emacs "29.1") (emacsql "3.0.0") (org-roam "2.2.2") (vulpea "0.3") (org-ml "5.8"))
 ;;
 ;; Created: 08 Jul 2022
 ;;
@@ -422,55 +422,70 @@ and the time taken by garbage collection. See also
         (unless (plist-get plan :delete)
           (porg-log "Nothing to delete, everything is used."))
         (when porg-enable-cleanup
-          (--each-indexed (plist-get plan :delete)
-            (when-let* ((cached (gethash it cache))
-                        (compiler-name (porg-cache-item-compiler cached))
-                        (compiler (--find (string-equal compiler-name (porg-compiler-name it))
-                                          (porg-project-compilers project))))
-              (porg-log
-               "[%s/%s] cleaning %s using %s rule from %s"
-               (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
-               delete-size
-               it
-               compiler-name
-               (porg-cache-item-output cached))
-              (when (porg-compiler-clean compiler)
-                (funcall (porg-compiler-clean compiler)
-                         (expand-file-name
-                          (porg-cache-item-output cached)
-                          (porg-project-root project))))
-              (remhash it cache)
-              ;; not the most effective way, but allows to decrease amount of work in case of failures
-              (porg-cache-write cache-file cache))))
+          (condition-case err
+              (progn
+                (--each-indexed (plist-get plan :delete)
+                  (when-let* ((cached (gethash it cache))
+                              (compiler-name (porg-cache-item-compiler cached))
+                              (compiler (--find (string-equal compiler-name (porg-compiler-name it))
+                                                (porg-project-compilers project))))
+                    (porg-log
+                     "[%s/%s] cleaning %s using %s rule from %s"
+                     (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
+                     delete-size
+                     it
+                     compiler-name
+                     (porg-cache-item-output cached))
+                    (when (porg-compiler-clean compiler)
+                      (funcall (porg-compiler-clean compiler)
+                               (expand-file-name
+                                (porg-cache-item-output cached)
+                                (porg-project-root project))))
+                    (remhash it cache)))
+                ;; update cache after we cleaned everything
+                (porg-cache-write cache-file cache))
+            (error
+             ;; on any error, still write out what we have so far
+             (message "Cleanup failed, saving partial cache...")
+             (porg-cache-write cache-file cache)
+             (signal (car err) (cdr err)))))
 
         (porg-log-s "build")
         (unless (plist-get plan :build)
           (porg-log "Nothing to build, everything is up to date."))
-        (--each-indexed (plist-get plan :build)
-          (let* ((item (gethash it items))
-                 (rule (porg-item-rule item))
-                 (compiler (porg-item-compiler item)))
-            (porg-log
-             "[%s/%s] (%s:%s) building %s"
-             (porg-string-from-number (+ 1 it-index) :padding-num build-size)
-             build-size
-             (porg-rule-name rule)
-             (porg-compiler-name compiler)
-             (funcall describe item))
-            (when-let ((build (porg-compiler-build compiler)))
-              (funcall build item items cache))
-            (puthash (porg-item-id item)
-                     (porg-cache-item-create
-                      :hash (porg-item-hash item)
-                      :output (porg-item-target-rel item)
-                      :project-hash project-hash
-                      :rule (porg-rule-name rule)
-                      :rule-hash (porg-sha1sum rule)
-                      :compiler (porg-compiler-name compiler)
-                      :compiler-hash (porg-sha1sum compiler))
-                     cache)
-            ;; not the most effective way, but allows to decrease amount of work in case of failures
-            (porg-cache-write cache-file cache)))
+        (condition-case err
+            (progn
+              (--each-indexed (plist-get plan :build)
+                (let* ((item (gethash it items))
+                       (rule (porg-item-rule item))
+                       (compiler (porg-item-compiler item)))
+                  (porg-log
+                   "[%s/%s] (%s:%s) building %s"
+                   (porg-string-from-number (+ 1 it-index) :padding-num build-size)
+                   build-size
+                   (porg-rule-name rule)
+                   (porg-compiler-name compiler)
+                   (funcall describe item))
+                  (when-let ((build (porg-compiler-build compiler)))
+                    (funcall build item items cache))
+                  (puthash (porg-item-id item)
+                           (porg-cache-item-create
+                            :hash (porg-item-hash item)
+                            :output (porg-item-target-rel item)
+                            :project-hash project-hash
+                            :rule (porg-rule-name rule)
+                            :rule-hash (porg-sha1sum rule)
+                            :compiler (porg-compiler-name compiler)
+                            :compiler-hash (porg-sha1sum compiler))
+                           cache)))
+              (when (plist-get plan :build)
+                ;; update cache on success
+                (porg-cache-write cache-file cache)))
+          (error
+           ;; on any error, still write out what we have so far
+           (message "Build failed, saving partial cache...")
+           (porg-cache-write cache-file cache)
+           (signal (car err) (cdr err))))
 
         (porg-log-s "run batch actions")
         (unless batch-rules
