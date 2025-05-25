@@ -42,6 +42,7 @@
 
 (defvar porg--projects nil)
 (defvar porg-enable-cleanup t)
+(defvar porg-detect-output-clashes nil)
 
 (cl-defgeneric porg-describe (thing)
   "Describe THING.")
@@ -95,13 +96,12 @@ When IGNORE-RULES is non-nil, rules do not depend on resulting hash."
       (setf (porg-project-compilers project) nil))
     (porg-sha1sum project)))
 
-(cl-defmethod porg-project-resolve-rule ((project porg-project) note)
+(cl-defmethod porg-project-resolve-rules ((project porg-project) note)
   "Resolve rule for NOTE from PROJECT."
-  (-find
-   (lambda (rule)
-     (when-let ((match (porg-rule-match rule)))
-       (funcall match note)))
-   (-filter #'porg-rule-p (porg-project-rules project))))
+  (->> (porg-project-rules project)
+       (-filter #'porg-rule-p)
+       (--filter (when-let ((match (porg-rule-match it)))
+                   (funcall match note)))))
 
 (cl-defmethod porg-project-resolve-compiler ((project porg-project) output)
   "Resolve compiler for OUTPUT from PROJECT."
@@ -255,7 +255,13 @@ plist (:variant)."
                           :extra-args `(:variant ,variant)))
                        variants)))
                    newnames)))
-               (-flatten))))))
+               (-flatten))))
+       (funcall
+        (lambda (list)
+          (let ((-compare-fn (lambda (a b)
+                               (string-equal (porg-rule-output-id a)
+                                             (porg-rule-output-id b)))))
+            (-distinct list))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
@@ -565,42 +571,47 @@ Throws a user error if any of the input has no matching rule."
           (setq logf #'porg-log)
         (setq logf #'porg-debug))
       (funcall logf "- outputs of %s:" (funcall describe it))
-      (if-let ((rule (porg-project-resolve-rule project it)))
-          (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
-                    (funcall outputs-fn it))
-            (funcall logf "  - %s" (funcall describe it))
-            (if-let ((compiler (porg-project-resolve-compiler project it)))
-                (let* ((target-rel (porg-rule-output-file it))
-                       (target-abs (when target-rel
-                                     (expand-file-name target-rel (porg-project-root project)))))
-                  (funcall logf "    - rel: %s" target-rel)
-                  (funcall logf "    - abs: %s" target-abs)
-                  (funcall logf "    - hard deps:")
-                  (--each (porg-rule-output-hard-deps it)
-                    (funcall logf "      - %s" (funcall describe it)))
-                  (funcall logf "    - soft deps:")
-                  (--each (porg-rule-output-soft-deps it)
-                    (funcall logf "      - %s" (funcall describe it)))
-                  (puthash
-                   (porg-rule-output-id it)
-                   (porg-item-create
-                    :id (porg-rule-output-id it)
-                    :type (porg-rule-output-type it)
-                    :item (porg-rule-output-item it)
-                    :hash (funcall (or (porg-compiler-hash compiler)
-                                       #'porg-sha1sum)
-                                   it)
-                    :rule rule
-                    :compiler compiler
-                    :target-abs target-abs
-                    :target-rel target-rel
-                    :hard-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
-                                      (porg-rule-output-hard-deps it))
-                    :soft-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
-                                      (porg-rule-output-soft-deps it))
-                    :extra-args (porg-rule-output-extra-args it))
-                   tbl))
-              (setf without-compiler (cons it without-compiler))))
+      (if-let ((rules (porg-project-resolve-rules project it)))
+          (-each rules
+            (lambda (rule)
+              (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
+                        (funcall outputs-fn it))
+                (funcall logf "  - [%s] %s" (porg-rule-name rule) (funcall describe it))
+                (if-let ((compiler (porg-project-resolve-compiler project it)))
+                    (let* ((target-rel (porg-rule-output-file it))
+                           (target-abs (when target-rel
+                                         (expand-file-name target-rel (porg-project-root project)))))
+                      (when porg-detect-output-clashes
+                        (when-let ((old (gethash (porg-rule-output-id it) tbl)))
+                          (user-error "Clash of output items by id '%s'" (porg-rule-output-id it))))
+                      (funcall logf "    - rel: %s" target-rel)
+                      (funcall logf "    - abs: %s" target-abs)
+                      (funcall logf "    - hard deps:")
+                      (--each (porg-rule-output-hard-deps it)
+                        (funcall logf "      - %s" (funcall describe it)))
+                      (funcall logf "    - soft deps:")
+                      (--each (porg-rule-output-soft-deps it)
+                        (funcall logf "      - %s" (funcall describe it)))
+                      (puthash
+                       (porg-rule-output-id it)
+                       (porg-item-create
+                        :id (porg-rule-output-id it)
+                        :type (porg-rule-output-type it)
+                        :item (porg-rule-output-item it)
+                        :hash (funcall (or (porg-compiler-hash compiler)
+                                           #'porg-sha1sum)
+                                       it)
+                        :rule rule
+                        :compiler compiler
+                        :target-abs target-abs
+                        :target-rel target-rel
+                        :hard-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
+                                          (porg-rule-output-hard-deps it))
+                        :soft-deps (--map (if (vulpea-note-p it) (vulpea-note-id it) it)
+                                          (porg-rule-output-soft-deps it))
+                        :extra-args (porg-rule-output-extra-args it))
+                       tbl))
+                  (setf without-compiler (cons it without-compiler))))))
         (setf without-rule (cons it without-rule))))
 
     (porg-log "found %s items to resolve" (seq-length (hash-table-keys tbl)))
