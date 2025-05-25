@@ -185,11 +185,7 @@ In addition, SOFT-DEPS are concatenated with list all linked notes."
    :item note
    :file file
    :hard-deps hard-deps
-   :soft-deps
-   (-concat soft-deps
-            (->> (vulpea-note-links note)
-                 (--filter (string-equal "id" (car it)))
-                 (--map (cdr it))))))
+   :soft-deps soft-deps))
 
 (cl-defun porg-attachments-output (note &key dir file-mod filter owner variants)
   "Make an list of attachments output for NOTE.
