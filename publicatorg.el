@@ -51,6 +51,12 @@
   "Describe THING."
   thing)
 
+(defvar porg-debug-input '())
+(defun porg-debug-input-p (item)
+  (cond
+   ((vulpea-note-p item) (seq-contains-p porg-debug-input (vulpea-note-id item)))
+   ((porg-item-p item) (porg-debug-input-p (porg-item-item item)))))
+
 
 
 (cl-defstruct (porg-project (:constructor porg-project-create)
