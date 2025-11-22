@@ -5,7 +5,7 @@
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
 ;; Version: 0.1
-;; Package-Requires: ((emacs "29.1") (emacsql "3.0.0") (org-roam "2.2.2") (vulpea "0.3") (org-ml "5.8"))
+;; Package-Requires: ((emacs "29.1") (emacsql "3.0.0") (vulpea "2.0.0") (org-ml "5.8"))
 ;;
 ;; Created: 08 Jul 2022
 ;;
@@ -211,19 +211,19 @@ variant, which is passed as extra args in form of a
 plist (:variant)."
   (->> note
        (vulpea-note-path)
-       (org-roam-db-query
-        [:select id
-                 :from nodes
-                 :where (= $s1 file)])
+       (emacsql (vulpea-db)
+                [:select id
+                 :from notes
+                 :where (= path $s1)])
        (-map #'car)
        (vulpea-db-query-by-ids)
        (-mapcat
         (lambda (a)
           (->> a
                (vulpea-note-links)
-               (--filter (and (string-equal (car it) "attachment")
-                              (or (not filter) (funcall filter (cdr it)))))
-               (--map (cdr it))
+               (--filter (and (string-equal (plist-get it :type) "attachment")
+                              (or (not filter) (funcall filter (plist-get it :dest)))))
+               (--map (plist-get it :dest))
                (--mapcat
                 (let* ((dir (if (functionp dir) (funcall dir it) dir))
                        (newname (concat (file-name-as-directory dir) it))
@@ -330,18 +330,18 @@ element and value its hash."
       (pcase porg-cache-method
         (`pp (with-temp-buffer
                (condition-case nil
-	           (progn
-	             (insert-file-contents file)
+	                 (progn
+	                   (insert-file-contents file)
                      (read (current-buffer)))
-	         (error
-	          (message "Could not read cache from %s" file)))))
+	               (error
+	                (message "Could not read cache from %s" file)))))
         (`prin1 (with-temp-buffer
                   (condition-case nil
-	              (progn
-	                (insert-file-contents file)
+	                    (progn
+	                      (insert-file-contents file)
                         (read (current-buffer)))
-	            (error
-	             (message "Could not read cache from %s" file)))))
+	                  (error
+	                   (message "Could not read cache from %s" file)))))
         (`json (with-temp-buffer
                  (insert-file-contents file)
                  (json-parse-buffer :object-type 'alist)))
@@ -353,11 +353,11 @@ element and value its hash."
   (pcase porg-cache-method
     (`pp (with-temp-file file
            (let ((print-level nil)
-	         (print-length nil))
+	               (print-length nil))
              (pp cache (current-buffer)))))
     (`prin1 (with-temp-file file
               (let ((print-level nil)
-	            (print-length nil))
+	                  (print-length nil))
                 (prin1 cache (current-buffer)))))
     (`json (let ((json-encoding-pretty-print t))
              (json-encode cache))
@@ -479,7 +479,11 @@ and the time taken by garbage collection. See also
                             :rule-hash (porg-sha1sum rule)
                             :compiler (porg-compiler-name compiler)
                             :compiler-hash (porg-sha1sum compiler))
-                           cache)))
+                           cache)
+                  (when (and (> it-index 0)
+                             (plist-get plan :build)
+                             (= (% it-index 100) 0))
+                    (porg-cache-write cache-file cache))))
               (when (plist-get plan :build)
                 ;; update cache on success
                 (porg-cache-write cache-file cache)))
@@ -772,25 +776,25 @@ All other links are transformed to plain text."
   (-> (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
       (--each
           (org-ml-update
-            (lambda (link)
-              (let ((type (org-ml-get-property :type link)))
-                (cond
-                 ((seq-contains-p '("https") type) link)
-                 ((seq-contains-p '("mailto") type) link)
+           (lambda (link)
+             (let ((type (org-ml-get-property :type link)))
+               (cond
+                ((seq-contains-p '("https") type) link)
+                ((seq-contains-p '("mailto") type) link)
 
-                 ((string-equal type "attachment")
-                  (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
+                ((string-equal type "attachment")
+                 (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
 
-                 ((string-equal type "file")
-                  (if sanitize-file-fn (funcall sanitize-file-fn link) link))
+                ((string-equal type "file")
+                 (if sanitize-file-fn (funcall sanitize-file-fn link) link))
 
-                 ((string-equal type "id")
-                  (if sanitize-id-fn (funcall sanitize-id-fn link) link))
+                ((string-equal type "id")
+                 (if sanitize-id-fn (funcall sanitize-id-fn link) link))
 
-                 (t (org-ml-from-string
-                     'plain-text
-                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
-            it))))
+                (t (org-ml-from-string
+                    'plain-text
+                    (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
+           it))))
 
 
 
@@ -875,11 +879,11 @@ OBJ can be either a note, a file or a Lisp object."
   (cond
    ((vulpea-note-p obj)
     (caar
-     (org-roam-db-query
-      [:select hash
+     (emacsql (vulpea-db)
+              [:select hash
                :from files
-               :where (= file $s1)]
-      (vulpea-note-path obj))))
+               :where (= path $s1)]
+              (vulpea-note-path obj))))
 
    ((porg-rule-output-p obj)
     (porg-sha1sum (porg-rule-output-item obj)))
@@ -893,8 +897,8 @@ OBJ can be either a note, a file or a Lisp object."
 
    (t (with-temp-buffer
         (let ((print-level nil)
-	      (print-length nil))
-	  (print obj (current-buffer))
+	            (print-length nil))
+	        (print obj (current-buffer))
           (secure-hash 'sha1 (current-buffer)))))))
 
 
