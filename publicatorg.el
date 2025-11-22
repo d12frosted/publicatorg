@@ -988,6 +988,59 @@ in the topological ordering (i.e., the first value)."
                    (unless all-sorted-p
                      entries))))))
 
+(defun porg-topological-levels (graph &optional test)
+  "Return parallel-safe levels for GRAPH, ignoring external deps.
+
+GRAPH is an alist of (node . deps). We only build the node's themselves;
+any dep not present as a node is treated as already done. TEST is the
+hash-table test, defaulting to `equal`."
+  (let* ((test     (or test 'equal))
+         ;; 1. collect just the nodes we want to build
+         (nodes    (mapcar #'car graph))
+         (node-set (let ((h (make-hash-table :test test)))
+                     (dolist (n nodes) (puthash n t h))
+                     h))
+         ;; 2. init in-degree and adjacency tables
+         (in-deg   (make-hash-table :test test))
+         (adj      (make-hash-table :test test))
+         levels queue next)
+
+    ;; initialise every node with zero in-degree and empty adj list
+    (dolist (n nodes)
+      (puthash n 0 in-deg)
+      (puthash n nil adj))
+
+    ;; 3. count only deps that are themselves in ‘nodes’
+    (dolist (pair graph)
+      (let ((node (car pair))
+            (deps (cdr pair)))
+        (dolist (d deps)
+          (when (gethash d node-set)
+            ;; increment in-degree for this node
+            (puthash node (1+ (gethash node in-deg)) in-deg)
+            ;; note that ‘node’ depends on ‘d’
+            (push node (gethash d adj))))))
+
+    ;; 4. seed initial queue of in-degree zero
+    (maphash (lambda (n deg)
+               (when (zerop deg)
+                 (push n queue)))
+             in-deg)
+
+    ;; 5. Kahn’s algorithm, collecting one level at a time
+    (while queue
+      (push queue levels)
+      (setq next nil)
+      (dolist (n queue)
+        ;; for each dependant m of n, decrement its in-degree
+        (dolist (m (gethash n adj))
+          (let ((new-deg (1- (gethash m in-deg))))
+            (puthash m new-deg in-deg)
+            (when (zerop new-deg)
+              (push m next)))))
+      (setq queue (nreverse next)))
+    (nreverse levels)))
+
 
 
 (defun porg-file-name-set-variant (file variant)
