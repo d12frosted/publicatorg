@@ -7,9 +7,28 @@
 
 ;; (eldev-add-extra-dependencies 'test 'emacsql)
 
-(eldev-use-local-dependency
- (expand-file-name "vulpea" (or (getenv "PROJECTS_HOME")
-                                (expand-file-name "Developer" (getenv "HOME")))))
+;;; Local/VC Dependency Resolution
+;;
+;; Use local dependencies when available (for development), otherwise
+;; fetch from GitHub.
+
+(defun porg-eldev-use-local-or-vc (name env-var default-path github-repo &optional commit)
+  "Use local dependency NAME if available, otherwise fetch from GitHub.
+ENV-VAR is the environment variable to check for path override.
+DEFAULT-PATH is the default local path relative to HOME.
+GITHUB-REPO is the GitHub repo in \"user/repo\" format.
+COMMIT is the optional commit hash or tag to use."
+  (let* ((env-path (getenv env-var))
+         (default-full-path (expand-file-name default-path (getenv "HOME")))
+         (local-path (or env-path
+                         (and (file-exists-p default-full-path) default-full-path))))
+    (if local-path
+        (eldev-use-local-dependency local-path)
+      (if commit
+          (eldev-use-vc-repository name :github github-repo :commit commit)
+        (eldev-use-vc-repository name :github github-repo)))))
+
+(porg-eldev-use-local-or-vc 'vulpea "VULPEA_PATH" "Developer/vulpea" "d12frosted/vulpea")
 
 
 ;; Linting configurations.
