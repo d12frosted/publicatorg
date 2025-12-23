@@ -51,8 +51,11 @@
   "Describe THING."
   thing)
 
-(defvar porg-debug-input '())
+(defvar porg-debug-input '("cbee3dd3-b997-4bec-96d3-99f483276e74"
+                           "a2d55f77-3e0d-44b6-9253-dacf46184497"
+                           "1a42758f-150a-4280-a980-f5897d69b54b"))
 (defun porg-debug-input-p (item)
+  "Return non-nil if ITEM is in the debug input list."
   (cond
    ((vulpea-note-p item) (seq-contains-p porg-debug-input (vulpea-note-id item)))
    ((porg-item-p item) (porg-debug-input-p (porg-item-item item)))))
@@ -669,9 +672,9 @@ Result is a property list (:compile :delete)."
                             (not cache-item)
 
                             ;; project changed
-                            (let ((res (not (string-equal project-hash (porg-cache-item-project-hash cache-item)))))
-                              (when res (porg-debug "%s: project changed" (funcall describe item)))
-                              res)
+                            ;; (let ((res (not (string-equal project-hash (porg-cache-item-project-hash cache-item)))))
+                            ;;   (when res (porg-debug "%s: project changed" (funcall describe item)))
+                            ;;   res)
 
                             ;; rule changed
                             (let ((res (not (string-equal (porg-sha1sum rule)
