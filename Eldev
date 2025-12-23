@@ -5,6 +5,9 @@
 
 (eldev-use-plugin 'autoloads)
 
+;; Use HEAD instead of latest stable tag for VC repos (vulpea v2.0.0 is not tagged yet)
+(setq eldev-prefer-stable-archives nil)
+
 ;; (eldev-add-extra-dependencies 'test 'emacsql)
 
 ;;; Local/VC Dependency Resolution
