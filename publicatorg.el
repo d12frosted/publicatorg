@@ -38,7 +38,7 @@
 (require 'org-ml)
 (require 'vulpea)
 
-
+
 
 (defvar porg--projects nil)
 (defvar porg-enable-cleanup t)
@@ -72,7 +72,7 @@ Note: Requires Emacs 26+ for thread support.")
    ((vulpea-note-p item) (seq-contains-p porg-debug-input (vulpea-note-id item)))
    ((porg-item-p item) (porg-debug-input-p (porg-item-item item)))))
 
-
+
 
 (cl-defstruct (porg-project (:constructor porg-project-create)
                             (:copier porg-project-copy))
@@ -132,7 +132,7 @@ When IGNORE-RULES is non-nil, rules do not depend on resulting hash."
        (funcall match output)))
    (-filter #'porg-compiler-p (porg-project-compilers project))))
 
-
+
 
 (cl-defstruct (porg-compiler (:constructor porg-compiler)
                              (:copier nil))
@@ -161,7 +161,7 @@ list of `porg-rule-output'."
   (match nil :read-only t :type function)
   (outputs nil :read-only t :type function))
 
-
+
 
 (cl-defstruct (porg-rule-output (:constructor porg-rule-output)
                                 (:copier nil))
@@ -292,7 +292,7 @@ plist (:variant)."
   (and (string-equal (porg-rule-output-type output) type)
        (or (not predicate) (funcall predicate (porg-rule-output-item output)))))
 
-
+
 
 (cl-defstruct (porg-batch-rule (:constructor porg-batch-rule)
                                (:copier nil))
@@ -315,7 +315,7 @@ based on FILTER), target file, input (as calculated by
   target
   publish)
 
-
+
 
 (defvar porg-cache-backend 'file
   "Cache backend to use.
@@ -519,7 +519,7 @@ File backend needs periodic sync; SQLite persists on each put."
   (and (porg-cache-p cache)
        (eq (porg-cache-backend cache) 'file)))
 
-
+
 
 (defmacro porg-benchmark-run (n fn &optional to-str &rest args)
   "Benchmark FN by running it N times with ARGS.
@@ -550,7 +550,7 @@ and the time taken by garbage collection. See also
        ""))
     v))
 
-
+
 
 ;;;###autoload
 (defun porg-run (name)
@@ -799,7 +799,7 @@ Returns list of errors (each is (id . error))."
       (thread-join thread))
     errors))
 
-
+
 
 (cl-defstruct (porg-item (:constructor porg-item-create)
                          (:copier nil))
@@ -836,7 +836,7 @@ Returns list of errors (each is (id . error))."
   "Describe THING."
   (format "(output %s) %s" (porg-rule-output-type thing) (porg-rule-output-id thing)))
 
-
+
 
 (defun porg-build-items (project)
   "Calculate PROJECT items to build.
@@ -931,7 +931,7 @@ Throws a user error if any of the input has no matching rule."
 
     tbl))
 
-
+
 
 (defun porg-build-plan (project items cache)
   "Calculate build plan of ITEMS for PROJECT with CACHE.
@@ -1028,7 +1028,7 @@ Result is a property list (:compile :delete)."
      :build build
      :delete delete)))
 
-
+
 
 ;; Publish utilities. Use these functions in your rule definition.
 
@@ -1086,7 +1086,7 @@ All other links are transformed to plain text."
                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
            it))))
 
-
+
 
 ;; Logging utilities
 
@@ -1120,7 +1120,7 @@ Noops depending on `porg-log-level'."
      "│ " (s-truncate l (s-pad-right l " " s)) " │\n"
      "└──────────────────────────────────────────────────────────────────────────────┘")))
 
-
+
 
 ;;  Other utilities
 
@@ -1191,7 +1191,7 @@ OBJ can be either a note, a file or a Lisp object."
 	        (print obj (current-buffer))
           (secure-hash 'sha1 (current-buffer)))))))
 
-
+
 
 (cl-defun porg-string-from-number (num
                                    &key
@@ -1220,7 +1220,7 @@ This function might be considered an overkill, but it's used in
                 num))
     (number-to-string num)))
 
-
+
 
 ;;
 ;; topological sort, see
@@ -1331,7 +1331,7 @@ hash-table test, defaulting to `equal`."
       (setq queue (nreverse next)))
     (nreverse levels)))
 
-
+
 
 (defun porg-file-name-set-variant (file variant)
   "Add VARIANT to FILE."
@@ -1344,7 +1344,77 @@ hash-table test, defaulting to `equal`."
             "@" variant
             "." (file-name-extension file))))
 
-
+
+;; * Media type utilities
+
+(defvar porg-supported-video-extensions '("mp4")
+  "List of supported video file extensions.")
+
+(defvar porg-supported-image-extensions '("jpeg" "png" "jpg" "heic" "webp" "gif" "svg")
+  "List of supported image file extensions.")
+
+(defvar porg-convertible-image-extensions '("jpeg" "png" "jpg" "heic" "webp")
+  "List of image extensions that can be converted to webp.")
+
+(defun porg-supported-media-p (file)
+  "Return non-nil if FILE is a supported media (image or video)."
+  (when-let ((ext (file-name-extension file)))
+    (seq-contains-p (append porg-supported-image-extensions
+                            porg-supported-video-extensions)
+                    (downcase ext))))
+
+(defun porg-supported-video-p (file)
+  "Return non-nil if FILE is a supported video."
+  (when-let ((ext (file-name-extension file)))
+    (seq-contains-p porg-supported-video-extensions (downcase ext))))
+
+(defun porg-supported-image-p (file)
+  "Return non-nil if FILE is a supported image."
+  (when-let ((ext (file-name-extension file)))
+    (seq-contains-p porg-supported-image-extensions (downcase ext))))
+
+(defun porg-convertible-image-p (file)
+  "Return non-nil if FILE is an image that can be converted to webp."
+  (when-let ((ext (file-name-extension file)))
+    (seq-contains-p porg-convertible-image-extensions (downcase ext))))
+
+
+;; * File name utilities
+
+(defun porg-file-name-sanitize (file-name new-ext)
+  "Sanitize FILE-NAME by replacing non-alphanumeric chars and setting NEW-EXT.
+Non-alphanumeric characters (except / and .) are replaced with dashes."
+  (let ((ext-old (file-name-extension file-name)))
+    (concat (replace-regexp-in-string
+             "[^a-zA-Z0-9/\\.]" "-"
+             (string-remove-suffix (concat "." ext-old) file-name))
+            "." new-ext)))
+
+(defun porg-file-name-for-web (file-name)
+  "Convert FILE-NAME to web-friendly format.
+For convertible images, changes extension to webp.
+For other files, returns unchanged."
+  (if (porg-convertible-image-p file-name)
+      (porg-file-name-sanitize file-name "webp")
+    file-name))
+
+(defun porg-file-name-replace-ext (file-name new-ext)
+  "Replace FILE-NAME extension with NEW-EXT."
+  (let ((ext-old (file-name-extension file-name)))
+    (concat (string-remove-suffix (concat "." ext-old) file-name) "." new-ext)))
+
+
+;; * Delete utilities
+
+(defun porg-delete-with-metadata (file)
+  "Delete FILE and its associated metadata file if it exists."
+  (when (file-exists-p file)
+    (delete-file file))
+  (let ((meta (concat file ".metadata")))
+    (when (file-exists-p meta)
+      (delete-file meta))))
+
+
 ;; * JSON support
 
 (defun porg-struct-to-alist (struct)
@@ -1379,7 +1449,7 @@ If OBJECT is not a struct, it calls ORIG-FUN."
 
 (advice-add 'json--print :around #'porg-json-print-wrapper)
 
-
+
 
 (provide 'publicatorg)
 ;;; publicatorg.el ends here
