@@ -16,12 +16,19 @@ playground/
 
 ## Note Distribution
 
-The playground contains 101 notes with various dependency patterns:
+The playground generates notes based on a configurable scale factor:
 
-- **40 independent notes** - no dependencies
-- **30 chain notes** - 5 chains of 6 notes (A→B→C→D→E→F)
-- **20 diamond notes** - 5 diamond patterns (A←B,C←D)
-- **11 hub notes** - 1 central hub with 10 dependents
+| Scale | Total Notes | Independent | Chains      | Diamonds    | Hubs        |
+|-------|-------------|-------------|-------------|-------------|-------------|
+| 1     | ~100        | 40          | 5×6 = 30    | 5×4 = 20    | 1×11 = 11   |
+| 10    | ~1000       | 400         | 50×6 = 300  | 50×4 = 200  | 10×11 = 110 |
+| 100   | ~10000      | 4000        | 500×6 = 3000| 500×4 = 2000| 100×11=1100 |
+
+Dependency patterns:
+- **Independent** - no dependencies
+- **Chains** - A→B→C→D→E→F (6 notes per chain)
+- **Diamonds** - A←B,C←D (4 notes per diamond)
+- **Hubs** - 1 central hub with 10 spokes
 
 ## Usage
 
@@ -30,7 +37,14 @@ The playground contains 101 notes with various dependency patterns:
 Regenerate synthetic notes (clears existing):
 
 ```bash
+# Default: 1000 notes (scale=10)
 eldev exec '(progn (load "test/playground/generate-notes.el") (playground-generate-notes))'
+
+# Custom scale: 100 notes
+eldev exec '(progn (load "test/playground/generate-notes.el") (playground-generate-notes 1))'
+
+# Large scale: 10000 notes
+eldev exec '(progn (load "test/playground/generate-notes.el") (playground-generate-notes 100))'
 ```
 
 ### Run Build
@@ -75,6 +89,13 @@ Set these variables before loading `build-rules.el`:
 
 ;; Parallel workers (nil = sequential, N = N workers)
 (setq playground-parallel 4)
+```
+
+For note generation, set `playground-scale` before calling `playground-generate-notes`:
+
+```elisp
+;; Or pass scale directly to the function
+(playground-generate-notes 10)  ; 1000 notes
 ```
 
 ## Expected Results
