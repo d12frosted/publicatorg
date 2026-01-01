@@ -469,7 +469,55 @@
                          :rules (list rule)
                          :compilers (list compiler))))
           ;; Should not error
-          (expect (porg-build-plan project items cache) :to-be-truthy)))))
+          (expect (porg-build-plan project items cache) :to-be-truthy))))
+
+    (it "rebuilds item when hard dep changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-hard-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (items (make-hash-table :test 'equal))
+             (cache (porg-test-make-cache))
+             (rule-hash (porg-sha1sum rule))
+             (compiler-hash (porg-sha1sum compiler)))
+        ;; Attachment (hard dep) - hash changed
+        (puthash "attachment"
+                 (porg-item-create
+                  :id "attachment" :type "attachment" :item "a" :hash "new-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "attachment.jpg" :target-abs (expand-file-name "attachment.jpg" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        ;; Note with hard dep on attachment - hash unchanged
+        (puthash "note"
+                 (porg-item-create
+                  :id "note" :type "note" :item "n" :hash "note-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "note.org" :target-abs (expand-file-name "note.org" root)
+                  :hard-deps '("attachment") :soft-deps nil)
+                 items)
+        ;; Cache: attachment has old hash, note is up-to-date
+        (porg-cache-put cache "attachment" (porg-cache-item-create :hash "old-hash" :output "attachment.jpg"
+                                                                    :rule "test" :rule-hash rule-hash
+                                                                    :compiler "test" :compiler-hash compiler-hash))
+        (porg-cache-put cache "note" (porg-cache-item-create :hash "note-hash" :output "note.org"
+                                                              :rule "test" :rule-hash rule-hash
+                                                              :compiler "test" :compiler-hash compiler-hash))
+        (let* ((project (porg-project-create
+                         :name "hard-test"
+                         :root root
+                         :cache-file "cache"
+                         :input (lambda () nil)
+                         :rules (list rule)
+                         :compilers (list compiler)))
+               (plan (porg-build-plan project items cache))
+               (build-list (plist-get plan :build)))
+          ;; Attachment should rebuild because its hash changed
+          (expect (member "attachment" build-list) :to-be-truthy)
+          ;; Note should rebuild because its hard dep (attachment) changed
+          (expect (member "note" build-list) :to-be-truthy)
+          ;; Attachment must come before note in build order (due to hard-dep)
+          (expect (seq-position build-list "attachment")
+                  :to-be-less-than (seq-position build-list "note"))))))
 
   (describe "cache invalidation triggers"
     (it "rebuilds when item hash changes"
