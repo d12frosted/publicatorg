@@ -38,6 +38,125 @@
 
 (setq-default porg-log-level 'debug)
 
+
+
+;; Unit tests for pure functions (no vulpea/org-roam setup required)
+
+(describe "porg-slug"
+  (it "converts simple title to lowercase"
+    (expect (porg-slug "Hello World") :to-equal "hello-world"))
+
+  (it "converts spaces and special chars to hyphens"
+    (expect (porg-slug "Hello, World!") :to-equal "hello--world-"))
+
+  (it "handles unicode characters"
+    (expect (porg-slug "Café") :to-equal "cafe"))
+
+  (it "handles accented characters"
+    (expect (porg-slug "naïve résumé") :to-equal "naive-resume"))
+
+  (it "removes diacritical marks"
+    (expect (porg-slug "Zürich") :to-equal "zurich"))
+
+  (it "handles empty string"
+    (expect (porg-slug "") :to-equal "")))
+
+(describe "porg-topological-sort"
+  (it "sorts simple linear chain"
+    (let ((graph '((a b) (b c) (c))))
+      (expect (car (porg-topological-sort graph)) :to-equal '(c b a))))
+
+  (it "sorts diamond dependency"
+    ;; d depends on b and c, both depend on a
+    (let* ((graph '((d b c) (b a) (c a) (a)))
+           (result (car (porg-topological-sort graph))))
+      ;; a must come before b and c, both must come before d
+      (expect (seq-position result 'a) :to-be-less-than (seq-position result 'b))
+      (expect (seq-position result 'a) :to-be-less-than (seq-position result 'c))
+      (expect (seq-position result 'b) :to-be-less-than (seq-position result 'd))
+      (expect (seq-position result 'c) :to-be-less-than (seq-position result 'd))))
+
+  (it "handles nodes with no dependencies"
+    (let ((graph '((a) (b) (c))))
+      (expect (length (car (porg-topological-sort graph))) :to-equal 3)))
+
+  (it "detects cycles and returns incomplete sort"
+    (let* ((graph '((a b) (b c) (c a)))
+           (result (porg-topological-sort graph)))
+      ;; Second value should be nil (not all sorted)
+      (expect (nth 1 result) :to-be nil)))
+
+  (it "handles empty graph"
+    (let ((result (porg-topological-sort nil)))
+      (expect (car result) :to-equal nil)
+      (expect (nth 1 result) :to-be-truthy)))
+
+  (it "respects :test parameter for string keys"
+    (let* ((graph '(("a" "b") ("b" "c") ("c")))
+           (result (car (porg-topological-sort graph :test 'equal))))
+      (expect result :to-equal '("c" "b" "a")))))
+
+(describe "porg-topological-levels"
+  (it "groups independent nodes into same level"
+    (let* ((graph '((a) (b) (c)))
+           (levels (porg-topological-levels graph)))
+      ;; All should be in first level (no deps)
+      (expect (length levels) :to-equal 1)
+      (expect (length (car levels)) :to-equal 3)))
+
+  (it "separates dependent nodes into different levels"
+    (let* ((graph '((a b) (b c) (c)))
+           (levels (porg-topological-levels graph)))
+      (expect (length levels) :to-equal 3)))
+
+  (it "handles diamond pattern correctly"
+    ;; d depends on b,c; b,c depend on a
+    (let* ((graph '((d b c) (b a) (c a) (a)))
+           (levels (porg-topological-levels graph)))
+      ;; Level 1: a, Level 2: b,c, Level 3: d
+      (expect (length levels) :to-equal 3)
+      (expect (car levels) :to-equal '(a))
+      (expect (length (nth 1 levels)) :to-equal 2)
+      (expect (car (last levels)) :to-equal '(d))))
+
+  (it "ignores external dependencies not in graph"
+    (let* ((graph '((a external-dep) (b)))
+           (levels (porg-topological-levels graph)))
+      ;; Both a and b should be in first level since external-dep is ignored
+      (expect (length levels) :to-equal 1)
+      (expect (length (car levels)) :to-equal 2))))
+
+(describe "porg-sha1sum"
+  (it "hashes lisp objects consistently"
+    (let ((obj '(a b c)))
+      (expect (porg-sha1sum obj) :to-equal (porg-sha1sum obj))))
+
+  (it "produces different hashes for different objects"
+    (expect (porg-sha1sum '(a b c)) :not :to-equal (porg-sha1sum '(a b d))))
+
+  (it "handles nested structures"
+    (let ((obj '((a . 1) (b . ((c . 2))))))
+      (expect (porg-sha1sum obj) :to-be-truthy)
+      (expect (length (porg-sha1sum obj)) :to-equal 40)))
+
+  (it "handles strings"
+    (expect (porg-sha1sum "hello") :to-be-truthy)
+    (expect (length (porg-sha1sum "hello")) :to-equal 40)))
+
+(describe "porg-string-from-number"
+  (it "converts number to string"
+    (expect (porg-string-from-number 42) :to-equal "42"))
+
+  (it "pads with spaces by default"
+    (expect (porg-string-from-number 5 :min-length 3) :to-equal "  5"))
+
+  (it "pads with zeros when specified"
+    (expect (porg-string-from-number 5 :min-length 3 :padding 'zero) :to-equal "005"))
+
+  (it "pads based on padding-num"
+    (expect (porg-string-from-number 5 :padding-num 100) :to-equal "  5")
+    (expect (porg-string-from-number 5 :padding-num 1000) :to-equal "   5")))
+
 (porg-define
  :name "porg-test"
  :root (file-name-as-directory (make-temp-file "porg-test" 'dir))
@@ -107,8 +226,7 @@
 (defun porg-test-init-in (dir)
   "Initialize testing environment in DIR."
   (setq org-roam-directory dir
-        org-roam-db-location (expand-file-name "org-roam.db" dir)
-        org-roam-database-connector 'sqlite-builtin)
+        org-roam-db-location (expand-file-name "org-roam.db" dir))
   (vulpea-db-autosync-enable)
   (org-roam-db-autosync-enable))
 
@@ -186,6 +304,7 @@
                    :id "fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7"
                    :immediate-finish t)
     (porg-run "porg-test")
+    ;; note-3 depends on previously non-existent fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7
     (expect 'porg-test-build-item :to-have-been-called-times 2))
 
   (it "should delete and rebuild an item that changed output path"
