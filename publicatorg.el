@@ -1174,10 +1174,9 @@ OBJ can be either a note, a file or a Lisp object."
    ((and
      (stringp obj)
      (file-exists-p obj))
-    (s-trim
-     (shell-command-to-string
-      (format "sha1sum %s | cut -d ' ' -f 1 -"
-              (shell-quote-argument obj)))))
+    (with-temp-buffer
+      (insert-file-contents-literally obj)
+      (secure-hash 'sha1 (current-buffer))))
 
    (t (with-temp-buffer
         (let ((print-level nil)
