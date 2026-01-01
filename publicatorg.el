@@ -293,6 +293,79 @@ plist (:variant)."
        (or (not predicate) (funcall predicate (porg-rule-output-item output)))))
 
 
+;; * Output generators
+
+(cl-defun porg-make-outputs (&key file
+                                   attach-dir
+                                   attach-filter
+                                   attach-file-mod
+                                   soft-deps
+                                   hard-deps
+                                   outputs-extra)
+  "Create an outputs function that combines note and attachment outputs.
+
+This is a convenience wrapper around `porg-note-output' and
+`porg-attachments-output' that handles common patterns:
+- Creates note output at FILE path
+- Creates attachment outputs with optional filtering
+- Creates extra outputs (e.g., JSON metadata)
+- Sets up hard dependencies so note depends on its attachments
+
+Arguments:
+FILE is a function (note -> string) returning relative output path.
+
+ATTACH-DIR is a function (note -> string) returning relative
+directory for attachments. When nil, attachments are skipped.
+
+ATTACH-FILTER is a predicate on attachment file name. Controls
+which attachments are included. Defaults to `porg-supported-media-p'.
+
+ATTACH-FILE-MOD is a function or list of functions to modify
+attachment file names. Common use: `porg-file-name-for-web'.
+
+SOFT-DEPS is a function (note -> list) returning soft dependencies.
+
+HARD-DEPS is a function (note -> list) returning hard dependencies.
+
+OUTPUTS-EXTRA is a function (note-output -> list) that takes the
+note output and returns additional outputs (e.g., JSON files).
+These extra outputs can declare their own dependencies.
+
+Returns a function suitable for use as :outputs in `porg-rule'.
+
+Dependency behavior:
+- The note output hard-depends on all attachment IDs
+- Extra outputs with type \"attachment\" are also added as hard deps
+- This ensures attachments are built before the note that references them"
+  (lambda (note)
+    (let* ((note-output (porg-note-output note :file (funcall file note)))
+           (attachments-output
+            (when attach-dir
+              (porg-attachments-output
+               note
+               :dir (lambda (attachment)
+                      (funcall attach-dir note))
+               :file-mod (or attach-file-mod (list #'porg-file-name-for-web))
+               :filter (or attach-filter #'porg-supported-media-p))))
+           (outputs-extra (when outputs-extra
+                            (funcall outputs-extra note-output))))
+      (append
+       attachments-output
+       outputs-extra
+       (list
+        (porg-note-output
+         note
+         :file (funcall file note)
+         :soft-deps (when soft-deps (funcall soft-deps note))
+         :hard-deps (append
+                     (when hard-deps (funcall hard-deps note))
+                     (mapcar #'porg-rule-output-id attachments-output)
+                     (mapcar #'porg-rule-output-id
+                             (seq-filter
+                              (lambda (it)
+                                (string-equal (porg-rule-output-type it) "attachment"))
+                              outputs-extra)))))))))
+
 
 (cl-defstruct (porg-batch-rule (:constructor porg-batch-rule)
                                (:copier nil))
