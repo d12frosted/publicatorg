@@ -1488,6 +1488,42 @@ For other files, returns unchanged."
       (delete-file meta))))
 
 
+;; * Content extraction
+
+(defun porg-extract-content (note)
+  "Extract content from NOTE, skipping metadata section.
+Returns the content as a string, excluding:
+- PROPERTIES drawer
+- Buffer keywords (#+title, etc.)
+- vulpea-meta section (first description list if present)
+- Leading whitespace after the above"
+  (vulpea-utils-with-note note
+    (let* ((meta (vulpea-buffer-meta))
+           (pl (plist-get meta :pl))
+           (start (if pl
+                      (org-element-property :end pl)
+                    (save-excursion
+                      (goto-char (point-min))
+                      ;; Skip PROPERTIES drawer
+                      (while (looking-at org-property-re)
+                        (forward-line 1))
+                      ;; Skip buffer keywords (#+title, etc.)
+                      (while (looking-at "^#\\+.+$")
+                        (forward-line 1))
+                      ;; Skip empty lines
+                      (while (and (looking-at "^ *$")
+                                  (not (eobp)))
+                        (forward-line 1))
+                      (point)))))
+      (buffer-substring-no-properties start (point-max)))))
+
+(defun porg-copy-content-to-file (target-file item)
+  "Copy content from ITEM's note to TARGET-FILE.
+Uses `porg-extract-content' to skip metadata section."
+  (with-temp-file target-file
+    (insert (porg-extract-content (porg-item-item item)))))
+
+
 ;; * JSON support
 
 (defun porg-struct-to-alist (struct)

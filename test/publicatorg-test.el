@@ -668,8 +668,8 @@
 
   (it "should build every item on the first run"
     (porg-run "porg-test")
-    ;; 5 notes: note-1, note-2, note-3, hard-dep-source, hard-dep-target
-    (expect 'porg-test-build-item :to-have-been-called-times 5))
+    ;; 6 notes: note-1, note-2, note-3, hard-dep-source, hard-dep-target, note-with-meta
+    (expect 'porg-test-build-item :to-have-been-called-times 6))
 
   (it "should not call any build function when project is unchanged"
     (porg-run "porg-test")
@@ -816,7 +816,32 @@
              (note-output (car (last outputs))))
         ;; Note should hard-depend on the extra attachment
         (expect (member extra-attachment-id (porg-rule-output-hard-deps note-output))
-                :to-be-truthy)))))
+                :to-be-truthy))))
+
+  (describe "porg-extract-content"
+    (it "extracts content from note without meta section"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (content (porg-extract-content note)))
+        ;; Should contain actual note content
+        (expect content :to-match "Luckily, I depend on")
+        ;; Should not contain properties or title
+        (expect content :not :to-match ":PROPERTIES:")))
+
+    (it "skips vulpea-meta section when present"
+      (let* ((note (vulpea-db-get-by-id "a1b2c3d4-e5f6-7890-abcd-ef1234567890"))
+             (content (porg-extract-content note)))
+        ;; Should contain actual content
+        (expect content :to-match "Content Section")
+        (expect content :to-match "This is the actual content")
+        ;; Should not contain metadata
+        (expect content :not :to-match "category :: test")
+        (expect content :not :to-match "priority :: high")))
+
+    (it "returns empty string for note with only metadata"
+      (let* ((note (vulpea-db-get-by-id "2801a0b7-53fe-4128-8ea3-0e6344c4c64c"))
+             (content (porg-extract-content note)))
+        ;; Note 2 has only PROPERTIES and title
+        (expect (string-trim content) :to-equal "")))))
 
 
 
