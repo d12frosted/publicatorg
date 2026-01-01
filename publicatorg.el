@@ -902,7 +902,8 @@ OBJ can be either a note, a file or a Lisp object."
      (file-exists-p obj))
     (s-trim
      (shell-command-to-string
-      (format "sha1sum '%s' | cut -d ' ' -f 1 -" obj))))
+      (format "sha1sum %s | cut -d ' ' -f 1 -"
+              (shell-quote-argument obj)))))
 
    (t (with-temp-buffer
         (let ((print-level nil)
