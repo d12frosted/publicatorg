@@ -158,6 +158,154 @@
     (expect (porg-string-from-number 5 :padding-num 1000) :to-equal "   5")))
 
 
+;; * Media type utilities tests
+
+(describe "porg-supported-media-p"
+  (it "returns t for supported images"
+    (expect (porg-supported-media-p "photo.jpg") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.jpeg") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.png") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.webp") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.gif") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.svg") :to-be-truthy)
+    (expect (porg-supported-media-p "photo.heic") :to-be-truthy))
+
+  (it "returns t for supported videos"
+    (expect (porg-supported-media-p "video.mp4") :to-be-truthy))
+
+  (it "returns nil for unsupported files"
+    (expect (porg-supported-media-p "document.pdf") :to-be nil)
+    (expect (porg-supported-media-p "file.txt") :to-be nil)
+    (expect (porg-supported-media-p "archive.zip") :to-be nil))
+
+  (it "handles uppercase extensions"
+    (expect (porg-supported-media-p "photo.JPG") :to-be-truthy)
+    (expect (porg-supported-media-p "video.MP4") :to-be-truthy))
+
+  (it "returns nil for files without extension"
+    (expect (porg-supported-media-p "noextension") :to-be nil)))
+
+(describe "porg-supported-video-p"
+  (it "returns t for mp4"
+    (expect (porg-supported-video-p "video.mp4") :to-be-truthy))
+
+  (it "returns nil for images"
+    (expect (porg-supported-video-p "photo.jpg") :to-be nil))
+
+  (it "handles uppercase"
+    (expect (porg-supported-video-p "VIDEO.MP4") :to-be-truthy)))
+
+(describe "porg-supported-image-p"
+  (it "returns t for all supported image formats"
+    (expect (porg-supported-image-p "a.jpeg") :to-be-truthy)
+    (expect (porg-supported-image-p "a.png") :to-be-truthy)
+    (expect (porg-supported-image-p "a.jpg") :to-be-truthy)
+    (expect (porg-supported-image-p "a.heic") :to-be-truthy)
+    (expect (porg-supported-image-p "a.webp") :to-be-truthy)
+    (expect (porg-supported-image-p "a.gif") :to-be-truthy)
+    (expect (porg-supported-image-p "a.svg") :to-be-truthy))
+
+  (it "returns nil for videos"
+    (expect (porg-supported-image-p "video.mp4") :to-be nil)))
+
+(describe "porg-convertible-image-p"
+  (it "returns t for convertible formats"
+    (expect (porg-convertible-image-p "a.jpeg") :to-be-truthy)
+    (expect (porg-convertible-image-p "a.png") :to-be-truthy)
+    (expect (porg-convertible-image-p "a.jpg") :to-be-truthy)
+    (expect (porg-convertible-image-p "a.heic") :to-be-truthy)
+    (expect (porg-convertible-image-p "a.webp") :to-be-truthy))
+
+  (it "returns nil for non-convertible images"
+    (expect (porg-convertible-image-p "a.gif") :to-be nil)
+    (expect (porg-convertible-image-p "a.svg") :to-be nil))
+
+  (it "returns nil for videos"
+    (expect (porg-convertible-image-p "video.mp4") :to-be nil)))
+
+
+;; * File name utilities tests
+
+(describe "porg-file-name-sanitize"
+  (it "replaces special chars with dashes"
+    (expect (porg-file-name-sanitize "my file (1).jpg" "webp")
+            :to-equal "my-file--1-.webp"))
+
+  (it "preserves alphanumeric chars"
+    (expect (porg-file-name-sanitize "simple123.png" "webp")
+            :to-equal "simple123.webp"))
+
+  (it "preserves slashes in paths"
+    (expect (porg-file-name-sanitize "path/to/file.jpg" "webp")
+            :to-equal "path/to/file.webp"))
+
+  (it "handles multiple dots"
+    (expect (porg-file-name-sanitize "file.name.with.dots.jpg" "webp")
+            :to-equal "file.name.with.dots.webp")))
+
+(describe "porg-file-name-for-web"
+  (it "converts convertible images to webp"
+    (expect (porg-file-name-for-web "photo.jpg") :to-equal "photo.webp")
+    (expect (porg-file-name-for-web "photo.png") :to-equal "photo.webp")
+    (expect (porg-file-name-for-web "photo.heic") :to-equal "photo.webp"))
+
+  (it "leaves non-convertible images unchanged"
+    (expect (porg-file-name-for-web "icon.svg") :to-equal "icon.svg")
+    (expect (porg-file-name-for-web "animation.gif") :to-equal "animation.gif"))
+
+  (it "leaves videos unchanged"
+    (expect (porg-file-name-for-web "video.mp4") :to-equal "video.mp4"))
+
+  (it "sanitizes file names while converting"
+    (expect (porg-file-name-for-web "My Photo (1).jpg")
+            :to-equal "My-Photo--1-.webp")))
+
+(describe "porg-file-name-replace-ext"
+  (it "replaces extension"
+    (expect (porg-file-name-replace-ext "file.md" "json")
+            :to-equal "file.json"))
+
+  (it "handles paths"
+    (expect (porg-file-name-replace-ext "path/to/file.org" "md")
+            :to-equal "path/to/file.md"))
+
+  (it "handles multiple dots in filename"
+    (expect (porg-file-name-replace-ext "file.backup.org" "md")
+            :to-equal "file.backup.md")))
+
+
+;; * Delete utilities tests
+
+(describe "porg-delete-with-metadata"
+  (it "deletes file and its metadata file"
+    (let* ((temp-dir (make-temp-file "porg-delete-test" t))
+           (file (expand-file-name "test.md" temp-dir))
+           (meta (concat file ".metadata")))
+      (with-temp-file file (insert "content"))
+      (with-temp-file meta (insert "metadata"))
+      (expect (file-exists-p file) :to-be-truthy)
+      (expect (file-exists-p meta) :to-be-truthy)
+      (porg-delete-with-metadata file)
+      (expect (file-exists-p file) :to-be nil)
+      (expect (file-exists-p meta) :to-be nil)
+      (delete-directory temp-dir t)))
+
+  (it "handles missing metadata file gracefully"
+    (let* ((temp-dir (make-temp-file "porg-delete-test" t))
+           (file (expand-file-name "test.md" temp-dir)))
+      (with-temp-file file (insert "content"))
+      (expect (file-exists-p file) :to-be-truthy)
+      (porg-delete-with-metadata file)
+      (expect (file-exists-p file) :to-be nil)
+      (delete-directory temp-dir t)))
+
+  (it "handles missing main file gracefully"
+    (let* ((temp-dir (make-temp-file "porg-delete-test" t))
+           (file (expand-file-name "nonexistent.md" temp-dir)))
+      ;; Should not error
+      (expect (porg-delete-with-metadata file) :not :to-throw)
+      (delete-directory temp-dir t))))
+
 
 ;; Tests for build-plan logic (mock-based, no vulpea required)
 
