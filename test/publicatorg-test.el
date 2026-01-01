@@ -157,6 +157,274 @@
     (expect (porg-string-from-number 5 :padding-num 100) :to-equal "  5")
     (expect (porg-string-from-number 5 :padding-num 1000) :to-equal "   5")))
 
+
+
+;; Tests for build-plan logic (mock-based, no vulpea required)
+
+(describe "porg-build-plan"
+  (describe "hard dependency build order"
+    (it "orders items so hard deps are built first"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-plan-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        ;; Create items where "child" depends on "parent"
+        (puthash "parent"
+                 (porg-item-create
+                  :id "parent"
+                  :type "note"
+                  :item "parent-content"
+                  :hash "hash-parent"
+                  :rule rule
+                  :compiler compiler
+                  :target-rel "parent.org"
+                  :target-abs (expand-file-name "parent.org" root)
+                  :hard-deps nil
+                  :soft-deps nil)
+                 items)
+        (puthash "child"
+                 (porg-item-create
+                  :id "child"
+                  :type "note"
+                  :item "child-content"
+                  :hash "hash-child"
+                  :rule rule
+                  :compiler compiler
+                  :target-rel "child.org"
+                  :target-abs (expand-file-name "child.org" root)
+                  :hard-deps '("parent")
+                  :soft-deps nil)
+                 items)
+        (let* ((project (porg-project-create
+                         :name "plan-test"
+                         :root root
+                         :cache-file "cache"
+                         :input (lambda () nil)
+                         :rules (list rule)
+                         :compilers (list compiler)))
+               (plan (porg-build-plan project items cache))
+               (build-order (plist-get plan :build)))
+          ;; Parent must come before child in build order
+          (expect (seq-position build-order "parent")
+                  :to-be-less-than
+                  (seq-position build-order "child")))))
+
+    (it "handles diamond dependency pattern"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-diamond-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        ;; Diamond: D depends on B,C; B,C depend on A
+        (puthash "A" (porg-item-create :id "A" :type "note" :item "a" :hash "a"
+                                       :rule rule :compiler compiler
+                                       :target-rel "a.org" :target-abs (expand-file-name "a.org" root)
+                                       :hard-deps nil :soft-deps nil) items)
+        (puthash "B" (porg-item-create :id "B" :type "note" :item "b" :hash "b"
+                                       :rule rule :compiler compiler
+                                       :target-rel "b.org" :target-abs (expand-file-name "b.org" root)
+                                       :hard-deps '("A") :soft-deps nil) items)
+        (puthash "C" (porg-item-create :id "C" :type "note" :item "c" :hash "c"
+                                       :rule rule :compiler compiler
+                                       :target-rel "c.org" :target-abs (expand-file-name "c.org" root)
+                                       :hard-deps '("A") :soft-deps nil) items)
+        (puthash "D" (porg-item-create :id "D" :type "note" :item "d" :hash "d"
+                                       :rule rule :compiler compiler
+                                       :target-rel "d.org" :target-abs (expand-file-name "d.org" root)
+                                       :hard-deps '("B" "C") :soft-deps nil) items)
+        (let* ((project (porg-project-create
+                         :name "diamond-test"
+                         :root root
+                         :cache-file "cache"
+                         :input (lambda () nil)
+                         :rules (list rule)
+                         :compilers (list compiler)))
+               (plan (porg-build-plan project items cache))
+               (build-order (plist-get plan :build)))
+          ;; A before B and C; B and C before D
+          (expect (seq-position build-order "A") :to-be-less-than (seq-position build-order "B"))
+          (expect (seq-position build-order "A") :to-be-less-than (seq-position build-order "C"))
+          (expect (seq-position build-order "B") :to-be-less-than (seq-position build-order "D"))
+          (expect (seq-position build-order "C") :to-be-less-than (seq-position build-order "D"))))))
+
+  (describe "soft dependency cache invalidation"
+    (it "rebuilds item when soft dep changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-soft-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal))
+             (rule-hash (porg-sha1sum rule))
+             (compiler-hash (porg-sha1sum compiler)))
+        ;; Parent item (soft dep target) - hash changed
+        (puthash "parent"
+                 (porg-item-create
+                  :id "parent" :type "note" :item "p" :hash "new-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "parent.org" :target-abs (expand-file-name "parent.org" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        ;; Child with soft dep on parent - hash unchanged
+        (puthash "child"
+                 (porg-item-create
+                  :id "child" :type "note" :item "c" :hash "child-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "child.org" :target-abs (expand-file-name "child.org" root)
+                  :hard-deps nil :soft-deps '("parent"))
+                 items)
+        ;; Cache: parent has old hash, child is up-to-date
+        (puthash "parent" (porg-cache-item-create :hash "old-hash" :output "parent.org"
+                                                   :rule "test" :rule-hash rule-hash
+                                                   :compiler "test" :compiler-hash compiler-hash)
+                 cache)
+        (puthash "child" (porg-cache-item-create :hash "child-hash" :output "child.org"
+                                                  :rule "test" :rule-hash rule-hash
+                                                  :compiler "test" :compiler-hash compiler-hash)
+                 cache)
+        (let* ((project (porg-project-create
+                         :name "soft-test"
+                         :root root
+                         :cache-file "cache"
+                         :input (lambda () nil)
+                         :rules (list rule)
+                         :compilers (list compiler)))
+               (plan (porg-build-plan project items cache))
+               (build-list (plist-get plan :build)))
+          ;; Parent should rebuild because its hash changed
+          (expect (member "parent" build-list) :to-be-truthy)
+          ;; Child should rebuild because its soft dep (parent) changed
+          (expect (member "child" build-list) :to-be-truthy))))
+
+    (it "does not fail when soft dep is missing from items"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-soft-missing-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        ;; Only child exists, soft dep "missing" doesn't exist
+        (puthash "child"
+                 (porg-item-create
+                  :id "child" :type "note" :item "c" :hash "child-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "child.org" :target-abs (expand-file-name "child.org" root)
+                  :hard-deps nil :soft-deps '("missing"))
+                 items)
+        (let* ((project (porg-project-create
+                         :name "soft-missing-test"
+                         :root root
+                         :cache-file "cache"
+                         :input (lambda () nil)
+                         :rules (list rule)
+                         :compilers (list compiler))))
+          ;; Should not error
+          (expect (porg-build-plan project items cache) :to-be-truthy)))))
+
+  (describe "cache invalidation triggers"
+    (it "rebuilds when item hash changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-hash-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (rule-hash (porg-sha1sum rule))
+             (compiler-hash (porg-sha1sum compiler))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        (puthash "item"
+                 (porg-item-create
+                  :id "item" :type "note" :item "content" :hash "new-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        (puthash "item" (porg-cache-item-create :hash "old-hash" :output "item.org"
+                                                 :rule "test" :rule-hash rule-hash
+                                                 :compiler "test" :compiler-hash compiler-hash)
+                 cache)
+        (let* ((project (porg-project-create
+                         :name "hash-test" :root root :cache-file "cache"
+                         :input (lambda () nil) :rules (list rule) :compilers (list compiler)))
+               (plan (porg-build-plan project items cache)))
+          (expect (member "item" (plist-get plan :build)) :to-be-truthy))))
+
+    (it "rebuilds when rule hash changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-rule-hash-test" 'dir)))
+             (old-rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (new-rule (porg-rule :name "test" :match #'identity :outputs (lambda (x) (list x))))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (old-rule-hash (porg-sha1sum old-rule))
+             (compiler-hash (porg-sha1sum compiler))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        (puthash "item"
+                 (porg-item-create
+                  :id "item" :type "note" :item "content" :hash "same-hash"
+                  :rule new-rule :compiler compiler
+                  :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
+                                                 :rule "test" :rule-hash old-rule-hash
+                                                 :compiler "test" :compiler-hash compiler-hash)
+                 cache)
+        (let* ((project (porg-project-create
+                         :name "rule-hash-test" :root root :cache-file "cache"
+                         :input (lambda () nil) :rules (list new-rule) :compilers (list compiler)))
+               (plan (porg-build-plan project items cache)))
+          (expect (member "item" (plist-get plan :build)) :to-be-truthy))))
+
+    (it "rebuilds when compiler hash changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-compiler-hash-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (old-compiler (porg-compiler :name "test" :match #'identity :build (lambda (x) x)))
+             (new-compiler (porg-compiler :name "test" :match #'identity :build (lambda (x) (list x))))
+             (rule-hash (porg-sha1sum rule))
+             (old-compiler-hash (porg-sha1sum old-compiler))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        (puthash "item"
+                 (porg-item-create
+                  :id "item" :type "note" :item "content" :hash "same-hash"
+                  :rule rule :compiler new-compiler
+                  :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
+                                                 :rule "test" :rule-hash rule-hash
+                                                 :compiler "test" :compiler-hash old-compiler-hash)
+                 cache)
+        (let* ((project (porg-project-create
+                         :name "compiler-hash-test" :root root :cache-file "cache"
+                         :input (lambda () nil) :rules (list rule) :compilers (list new-compiler)))
+               (plan (porg-build-plan project items cache)))
+          (expect (member "item" (plist-get plan :build)) :to-be-truthy))))
+
+    (it "rebuilds when output path changes"
+      (let* ((root (file-name-as-directory (make-temp-file "porg-path-test" 'dir)))
+             (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+             (compiler (porg-compiler :name "test" :match #'identity))
+             (rule-hash (porg-sha1sum rule))
+             (compiler-hash (porg-sha1sum compiler))
+             (items (make-hash-table :test 'equal))
+             (cache (make-hash-table :test 'equal)))
+        (puthash "item"
+                 (porg-item-create
+                  :id "item" :type "note" :item "content" :hash "same-hash"
+                  :rule rule :compiler compiler
+                  :target-rel "new-path.org" :target-abs (expand-file-name "new-path.org" root)
+                  :hard-deps nil :soft-deps nil)
+                 items)
+        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "old-path.org"
+                                                 :rule "test" :rule-hash rule-hash
+                                                 :compiler "test" :compiler-hash compiler-hash)
+                 cache)
+        (let* ((project (porg-project-create
+                         :name "path-test" :root root :cache-file "cache"
+                         :input (lambda () nil) :rules (list rule) :compilers (list compiler)))
+               (plan (porg-build-plan project items cache)))
+          (expect (member "item" (plist-get plan :build)) :to-be-truthy)
+          ;; Old path should be in delete list
+          (expect (member "item" (plist-get plan :delete)) :to-be-truthy))))))
+
 (porg-define
  :name "porg-test"
  :root (file-name-as-directory (make-temp-file "porg-test" 'dir))

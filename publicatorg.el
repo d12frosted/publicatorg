@@ -51,6 +51,7 @@
   "Describe THING."
   thing)
 
+
 (defvar porg-debug-input '("cbee3dd3-b997-4bec-96d3-99f483276e74"
                            "a2d55f77-3e0d-44b6-9253-dacf46184497"
                            "1a42758f-150a-4280-a980-f5897d69b54b"))
@@ -554,6 +555,15 @@ and the time taken by garbage collection. See also
   "Check that ITEM has TYPE and satisfies PREDICATE (optional)."
   (and (string-equal (porg-item-type item) type)
        (or (not predicate) (funcall predicate (porg-item-item item)))))
+
+
+(cl-defmethod porg-describe ((thing porg-item))
+  "Describe THING."
+  (format "(item %s) %s" (porg-item-type thing) (porg-item-id thing)))
+
+(cl-defmethod porg-describe ((thing porg-rule-output))
+  "Describe THING."
+  (format "(output %s) %s" (porg-rule-output-type thing) (porg-rule-output-id thing)))
 
 
 
