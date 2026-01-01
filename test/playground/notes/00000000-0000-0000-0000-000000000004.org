@@ -1,7 +1,14 @@
 :PROPERTIES:
 :ID:       00000000-0000-0000-0000-000000000004
+:DIR:      data/00000000-0000-0000-0000-000000000004
 :END:
 #+title: Independent 4
+
+* Images
+
+[[attachment:image-1.jpg]]
+[[attachment:image-2.jpg]]
+
 
 * Content
 
