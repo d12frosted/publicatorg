@@ -43,6 +43,10 @@
 (defvar porg--projects nil)
 (defvar porg-enable-cleanup t)
 (defvar porg-detect-output-clashes nil)
+(defvar porg-dry-run nil
+  "When non-nil, show what would be built/cleaned but don't execute.
+In dry-run mode, no files are created, modified, or deleted, and
+the cache is not updated.")
 
 (cl-defgeneric porg-describe (thing)
   "Describe THING.")
@@ -556,7 +560,7 @@ and the time taken by garbage collection. See also
                                    (porg-project-rules project)))
              (project-hash (porg-project-hash project 'ignore-rules)))
 
-        (porg-log-s "cleanup")
+        (porg-log-s (if porg-dry-run "cleanup (dry-run)" "cleanup"))
         (unless (plist-get plan :delete)
           (porg-log "Nothing to delete, everything is used."))
         (when porg-enable-cleanup
@@ -568,27 +572,31 @@ and the time taken by garbage collection. See also
                               (compiler (--find (string-equal compiler-name (porg-compiler-name it))
                                                 (porg-project-compilers project))))
                     (porg-log
-                     "[%s/%s] cleaning %s using %s rule from %s"
+                     "[%s/%s]%s cleaning %s using %s rule from %s"
                      (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
                      delete-size
+                     (if porg-dry-run " [dry-run]" "")
                      it
                      compiler-name
                      (porg-cache-item-output cached))
-                    (when (porg-compiler-clean compiler)
-                      (funcall (porg-compiler-clean compiler)
-                               (expand-file-name
-                                (porg-cache-item-output cached)
-                                (porg-project-root project))))
-                    (porg-cache-remove cache it)))
+                    (unless porg-dry-run
+                      (when (porg-compiler-clean compiler)
+                        (funcall (porg-compiler-clean compiler)
+                                 (expand-file-name
+                                  (porg-cache-item-output cached)
+                                  (porg-project-root project))))
+                      (porg-cache-remove cache it))))
                 ;; update cache after we cleaned everything
-                (porg-cache-write cache-file cache))
+                (unless porg-dry-run
+                  (porg-cache-write cache-file cache)))
             (error
              ;; on any error, still write out what we have so far
-             (message "Cleanup failed, saving partial cache...")
-             (porg-cache-write cache-file cache)
+             (unless porg-dry-run
+               (message "Cleanup failed, saving partial cache...")
+               (porg-cache-write cache-file cache))
              (signal (car err) (cdr err)))))
 
-        (porg-log-s "build")
+        (porg-log-s (if porg-dry-run "build (dry-run)" "build"))
         (unless (plist-get plan :build)
           (porg-log "Nothing to build, everything is up to date."))
         (condition-case err
@@ -598,38 +606,42 @@ and the time taken by garbage collection. See also
                        (rule (porg-item-rule item))
                        (compiler (porg-item-compiler item)))
                   (porg-log
-                   "[%s/%s] (%s:%s) building %s"
+                   "[%s/%s]%s (%s:%s) building %s"
                    (porg-string-from-number (+ 1 it-index) :padding-num build-size)
                    build-size
+                   (if porg-dry-run " [dry-run]" "")
                    (porg-rule-name rule)
                    (porg-compiler-name compiler)
                    (funcall describe item))
-                  (when-let ((build (porg-compiler-build compiler)))
-                    (funcall build item items cache))
-                  (porg-cache-put cache
-                                  (porg-item-id item)
-                                  (porg-cache-item-create
-                                   :hash (porg-item-hash item)
-                                   :output (porg-item-target-rel item)
-                                   :project-hash project-hash
-                                   :rule (porg-rule-name rule)
-                                   :rule-hash (porg-sha1sum rule)
-                                   :compiler (porg-compiler-name compiler)
-                                   :compiler-hash (porg-sha1sum compiler)))
-                  (when (and (> it-index 0)
-                             (plist-get plan :build)
-                             (= (% it-index 100) 0))
-                    (porg-cache-write cache-file cache))))
-              (when (plist-get plan :build)
-                ;; update cache on success
-                (porg-cache-write cache-file cache)))
+                  (unless porg-dry-run
+                    (when-let* ((build (porg-compiler-build compiler)))
+                      (funcall build item items cache))
+                    (porg-cache-put cache
+                                    (porg-item-id item)
+                                    (porg-cache-item-create
+                                     :hash (porg-item-hash item)
+                                     :output (porg-item-target-rel item)
+                                     :project-hash project-hash
+                                     :rule (porg-rule-name rule)
+                                     :rule-hash (porg-sha1sum rule)
+                                     :compiler (porg-compiler-name compiler)
+                                     :compiler-hash (porg-sha1sum compiler)))
+                    (when (and (> it-index 0)
+                               (plist-get plan :build)
+                               (= (% it-index 100) 0))
+                      (porg-cache-write cache-file cache)))))
+              (unless porg-dry-run
+                (when (plist-get plan :build)
+                  ;; update cache on success
+                  (porg-cache-write cache-file cache))))
           (error
            ;; on any error, still write out what we have so far
-           (message "Build failed, saving partial cache...")
-           (porg-cache-write cache-file cache)
+           (unless porg-dry-run
+             (message "Build failed, saving partial cache...")
+             (porg-cache-write cache-file cache))
            (signal (car err) (cdr err))))
 
-        (porg-log-s "run batch actions")
+        (porg-log-s (if porg-dry-run "run batch actions (dry-run)" "run batch actions"))
         (unless batch-rules
           (porg-log "No batch actions to run"))
         (--each-indexed batch-rules
@@ -643,17 +655,30 @@ and the time taken by garbage collection. See also
                  (target (porg-batch-rule-target it))
                  (target (if (functionp target) (funcall target items) target)))
             (porg-log
-             "[%s/%s] running %s batch action on the set of %s notes"
+             "[%s/%s]%s running %s batch action on the set of %s notes"
              (porg-string-from-number (+ 1 it-index) :padding-num (seq-length batch-rules))
              (seq-length batch-rules)
+             (if porg-dry-run " [dry-run]" "")
              (porg-batch-rule-name it)
              size)
-            (funcall (porg-batch-rule-publish it) target items-selected items cache)))
+            (unless porg-dry-run
+              (funcall (porg-batch-rule-publish it) target items-selected items cache))))
 
-        (porg-cache-write cache-file cache)
+        (unless porg-dry-run
+          (porg-cache-write cache-file cache))
         (porg-cache-close cache)
-        (porg-log "The work is done! Enjoy your published vulpea notes!")
-        (porg-log "        ٩(^ᴗ^)۶")))))
+        (if porg-dry-run
+            (porg-log "Dry run complete! No changes were made.")
+          (porg-log "The work is done! Enjoy your published vulpea notes!")
+          (porg-log "        ٩(^ᴗ^)۶"))))))
+
+;;;###autoload
+(defun porg-run-dry (name)
+  "Export project with NAME in dry-run mode.
+Shows what would be built/cleaned without actually executing anything.
+This is equivalent to (let ((porg-dry-run t)) (porg-run NAME))."
+  (let ((porg-dry-run t))
+    (porg-run name)))
 
 
 
