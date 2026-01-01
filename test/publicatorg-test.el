@@ -34,7 +34,7 @@
 (require 'publicatorg)
 (require 'buttercup)
 
-
+
 
 (setq-default porg-log-level 'debug)
 
@@ -628,7 +628,7 @@
   "Clean FILE."
   (delete-file file))
 
-
+
 
 (defvar porg-test-directory (expand-file-name "test/notes")
   "Directory containing test notes.")
@@ -656,7 +656,7 @@
   (when (file-exists-p vulpea-db-location)
     (delete-file vulpea-db-location)))
 
-
+
 
 (describe "publicatorg"
   (before-all (porg-test-init))
@@ -747,9 +747,78 @@
 
       (porg-run "porg-test")
       (expect 'porg-test-build-item :to-have-been-called-times 1)
-      (expect 'porg-test-clean-item :to-have-been-called-times 1))))
+      (expect 'porg-test-clean-item :to-have-been-called-times 1)))
 
-
+  (describe "porg-make-outputs"
+    (it "returns note output as the last item"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (outputs-fn (porg-make-outputs
+                          :file (lambda (n) (concat "out/" (vulpea-note-id n) ".md"))))
+             (outputs (funcall outputs-fn note)))
+        ;; Note output should be last
+        (expect (porg-rule-output-type (car (last outputs))) :to-equal "note")
+        (expect (porg-rule-output-id (car (last outputs))) :to-equal (vulpea-note-id note))))
+
+    (it "includes extra outputs before note output"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (outputs-fn (porg-make-outputs
+                          :file (lambda (n) (concat "out/" (vulpea-note-id n) ".md"))
+                          :outputs-extra
+                          (lambda (note-output)
+                            (list
+                             (porg-rule-output
+                              :id (concat (porg-rule-output-id note-output) ".json")
+                              :type "json"
+                              :item (porg-rule-output-item note-output)
+                              :file (porg-file-name-replace-ext
+                                     (porg-rule-output-file note-output) "json"))))))
+             (outputs (funcall outputs-fn note))
+             (json-output (seq-find (lambda (o) (string-equal (porg-rule-output-type o) "json"))
+                                    outputs)))
+        ;; Should have json output
+        (expect json-output :to-be-truthy)
+        (expect (porg-rule-output-file json-output) :to-match "\\.json$")))
+
+    (it "applies soft-deps function to note"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (soft-dep-id "test-soft-dep-id")
+             (outputs-fn (porg-make-outputs
+                          :file (lambda (n) (concat "out/" (vulpea-note-id n) ".md"))
+                          :soft-deps (lambda (n) (list soft-dep-id))))
+             (outputs (funcall outputs-fn note))
+             (note-output (car (last outputs))))
+        (expect (member soft-dep-id (porg-rule-output-soft-deps note-output)) :to-be-truthy)))
+
+    (it "applies hard-deps function to note"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (hard-dep-id "test-hard-dep-id")
+             (outputs-fn (porg-make-outputs
+                          :file (lambda (n) (concat "out/" (vulpea-note-id n) ".md"))
+                          :hard-deps (lambda (n) (list hard-dep-id))))
+             (outputs (funcall outputs-fn note))
+             (note-output (car (last outputs))))
+        (expect (member hard-dep-id (porg-rule-output-hard-deps note-output)) :to-be-truthy)))
+
+    (it "adds extra attachment outputs to note hard-deps"
+      (let* ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab"))
+             (extra-attachment-id "extra-attachment-id")
+             (outputs-fn (porg-make-outputs
+                          :file (lambda (n) (concat "out/" (vulpea-note-id n) ".md"))
+                          :outputs-extra
+                          (lambda (note-output)
+                            (list
+                             (porg-rule-output
+                              :id extra-attachment-id
+                              :type "attachment"
+                              :item "/path/to/file.jpg"
+                              :file "images/file.webp")))))
+             (outputs (funcall outputs-fn note))
+             (note-output (car (last outputs))))
+        ;; Note should hard-depend on the extra attachment
+        (expect (member extra-attachment-id (porg-rule-output-hard-deps note-output))
+                :to-be-truthy)))))
+
+
 
 (provide 'publicatorg-test)
 ;;; publicatorg-test.el ends here
