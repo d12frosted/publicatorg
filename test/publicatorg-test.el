@@ -161,6 +161,11 @@
 
 ;; Tests for build-plan logic (mock-based, no vulpea required)
 
+;; Test helper to create a cache from a hash-table
+(defun porg-test-make-cache (&optional ht)
+  "Create a porg-cache from hash-table HT for testing."
+  (porg-cache--create :backend 'file :file nil :data (or ht (make-hash-table :test 'equal))))
+
 (describe "porg-build-plan"
   (describe "hard dependency build order"
     (it "orders items so hard deps are built first"
@@ -168,7 +173,7 @@
              (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
              (compiler (porg-compiler :name "test" :match #'identity))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         ;; Create items where "child" depends on "parent"
         (puthash "parent"
                  (porg-item-create
@@ -215,7 +220,7 @@
              (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
              (compiler (porg-compiler :name "test" :match #'identity))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         ;; Diamond: D depends on B,C; B,C depend on A
         (puthash "A" (porg-item-create :id "A" :type "note" :item "a" :hash "a"
                                        :rule rule :compiler compiler
@@ -254,7 +259,7 @@
              (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
              (compiler (porg-compiler :name "test" :match #'identity))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal))
+             (cache (porg-test-make-cache))
              (rule-hash (porg-sha1sum rule))
              (compiler-hash (porg-sha1sum compiler)))
         ;; Parent item (soft dep target) - hash changed
@@ -274,14 +279,12 @@
                   :hard-deps nil :soft-deps '("parent"))
                  items)
         ;; Cache: parent has old hash, child is up-to-date
-        (puthash "parent" (porg-cache-item-create :hash "old-hash" :output "parent.org"
-                                                   :rule "test" :rule-hash rule-hash
-                                                   :compiler "test" :compiler-hash compiler-hash)
-                 cache)
-        (puthash "child" (porg-cache-item-create :hash "child-hash" :output "child.org"
-                                                  :rule "test" :rule-hash rule-hash
-                                                  :compiler "test" :compiler-hash compiler-hash)
-                 cache)
+        (porg-cache-put cache "parent" (porg-cache-item-create :hash "old-hash" :output "parent.org"
+                                                                :rule "test" :rule-hash rule-hash
+                                                                :compiler "test" :compiler-hash compiler-hash))
+        (porg-cache-put cache "child" (porg-cache-item-create :hash "child-hash" :output "child.org"
+                                                               :rule "test" :rule-hash rule-hash
+                                                               :compiler "test" :compiler-hash compiler-hash))
         (let* ((project (porg-project-create
                          :name "soft-test"
                          :root root
@@ -301,7 +304,7 @@
              (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
              (compiler (porg-compiler :name "test" :match #'identity))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         ;; Only child exists, soft dep "missing" doesn't exist
         (puthash "child"
                  (porg-item-create
@@ -328,7 +331,7 @@
              (rule-hash (porg-sha1sum rule))
              (compiler-hash (porg-sha1sum compiler))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         (puthash "item"
                  (porg-item-create
                   :id "item" :type "note" :item "content" :hash "new-hash"
@@ -336,10 +339,9 @@
                   :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
                   :hard-deps nil :soft-deps nil)
                  items)
-        (puthash "item" (porg-cache-item-create :hash "old-hash" :output "item.org"
-                                                 :rule "test" :rule-hash rule-hash
-                                                 :compiler "test" :compiler-hash compiler-hash)
-                 cache)
+        (porg-cache-put cache "item" (porg-cache-item-create :hash "old-hash" :output "item.org"
+                                                              :rule "test" :rule-hash rule-hash
+                                                              :compiler "test" :compiler-hash compiler-hash))
         (let* ((project (porg-project-create
                          :name "hash-test" :root root :cache-file "cache"
                          :input (lambda () nil) :rules (list rule) :compilers (list compiler)))
@@ -354,7 +356,7 @@
              (old-rule-hash (porg-sha1sum old-rule))
              (compiler-hash (porg-sha1sum compiler))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         (puthash "item"
                  (porg-item-create
                   :id "item" :type "note" :item "content" :hash "same-hash"
@@ -362,10 +364,9 @@
                   :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
                   :hard-deps nil :soft-deps nil)
                  items)
-        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
-                                                 :rule "test" :rule-hash old-rule-hash
-                                                 :compiler "test" :compiler-hash compiler-hash)
-                 cache)
+        (porg-cache-put cache "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
+                                                              :rule "test" :rule-hash old-rule-hash
+                                                              :compiler "test" :compiler-hash compiler-hash))
         (let* ((project (porg-project-create
                          :name "rule-hash-test" :root root :cache-file "cache"
                          :input (lambda () nil) :rules (list new-rule) :compilers (list compiler)))
@@ -380,7 +381,7 @@
              (rule-hash (porg-sha1sum rule))
              (old-compiler-hash (porg-sha1sum old-compiler))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         (puthash "item"
                  (porg-item-create
                   :id "item" :type "note" :item "content" :hash "same-hash"
@@ -388,10 +389,9 @@
                   :target-rel "item.org" :target-abs (expand-file-name "item.org" root)
                   :hard-deps nil :soft-deps nil)
                  items)
-        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
-                                                 :rule "test" :rule-hash rule-hash
-                                                 :compiler "test" :compiler-hash old-compiler-hash)
-                 cache)
+        (porg-cache-put cache "item" (porg-cache-item-create :hash "same-hash" :output "item.org"
+                                                              :rule "test" :rule-hash rule-hash
+                                                              :compiler "test" :compiler-hash old-compiler-hash))
         (let* ((project (porg-project-create
                          :name "compiler-hash-test" :root root :cache-file "cache"
                          :input (lambda () nil) :rules (list rule) :compilers (list new-compiler)))
@@ -405,7 +405,7 @@
              (rule-hash (porg-sha1sum rule))
              (compiler-hash (porg-sha1sum compiler))
              (items (make-hash-table :test 'equal))
-             (cache (make-hash-table :test 'equal)))
+             (cache (porg-test-make-cache)))
         (puthash "item"
                  (porg-item-create
                   :id "item" :type "note" :item "content" :hash "same-hash"
@@ -413,10 +413,9 @@
                   :target-rel "new-path.org" :target-abs (expand-file-name "new-path.org" root)
                   :hard-deps nil :soft-deps nil)
                  items)
-        (puthash "item" (porg-cache-item-create :hash "same-hash" :output "old-path.org"
-                                                 :rule "test" :rule-hash rule-hash
-                                                 :compiler "test" :compiler-hash compiler-hash)
-                 cache)
+        (porg-cache-put cache "item" (porg-cache-item-create :hash "same-hash" :output "old-path.org"
+                                                              :rule "test" :rule-hash rule-hash
+                                                              :compiler "test" :compiler-hash compiler-hash))
         (let* ((project (porg-project-create
                          :name "path-test" :root root :cache-file "cache"
                          :input (lambda () nil) :rules (list rule) :compilers (list compiler)))

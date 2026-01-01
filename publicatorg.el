@@ -306,16 +306,22 @@ based on FILTER), target file, input (as calculated by
 
 
 
-(defvar porg-cache-method 'pp
-  "Cache method.
+(defvar porg-cache-backend 'file
+  "Cache backend to use.
 
 Can be one of:
+- `file' - serialize to a file using `porg-cache-file-method'
+- `sqlite' - use SQLite database for incremental updates")
 
-- `pp', i.e. pretty print as Lisp object, which human and git-friendly;
-  but might be very slow with big amount of data;
- - `prin1' - serialize as Lisp object, very fast, but not human and
-   git-friendly as whole object is persisted as one line;
-- json - serialize as JSON.")
+(defvar porg-cache-file-method 'pp
+  "Serialization method for file-based cache.
+
+Can be one of:
+- `pp' - pretty print as Lisp object (human and git-friendly, but slow)
+- `prin1' - compact Lisp object (fast, but single line)")
+
+;; Legacy alias for backward compatibility
+(defvaralias 'porg-cache-method 'porg-cache-file-method)
 
 (cl-defstruct (porg-cache-item (:constructor porg-cache-item-create))
   (hash nil :type string)
@@ -326,55 +332,175 @@ Can be one of:
   (compiler nil :type string)
   (compiler-hash nil :type string))
 
+;; Cache handle structure
+(cl-defstruct (porg-cache (:constructor porg-cache--create))
+  "Cache handle for abstracting storage backend."
+  (backend nil :type symbol)
+  (file nil :type string)
+  (data nil))
+
+;; Generic cache operations
+(cl-defgeneric porg-cache-open (backend file)
+  "Open cache FILE using BACKEND.")
+
+(cl-defgeneric porg-cache-get (cache id)
+  "Get value for ID from CACHE.")
+
+(cl-defgeneric porg-cache-put (cache id value)
+  "Put VALUE for ID into CACHE.")
+
+(cl-defgeneric porg-cache-remove (cache id)
+  "Remove ID from CACHE.")
+
+(cl-defgeneric porg-cache-keys (cache)
+  "Return all keys in CACHE.")
+
+(cl-defgeneric porg-cache-sync (cache)
+  "Sync CACHE to persistent storage.")
+
+(cl-defgeneric porg-cache-close (cache)
+  "Close CACHE and release resources.")
+
+;; File backend implementation
+(cl-defmethod porg-cache-open ((_backend (eql file)) file)
+  "Open file-based cache."
+  (let ((data (if (file-exists-p file)
+                  (condition-case nil
+                      (with-temp-buffer
+                        (insert-file-contents file)
+                        (read (current-buffer)))
+                    (error
+                     (message "Could not read cache from %s, starting fresh" file)
+                     (make-hash-table :test 'equal)))
+                (make-hash-table :test 'equal))))
+    (porg-cache--create :backend 'file :file file :data data)))
+
+;; SQLite backend implementation
+(cl-defmethod porg-cache-open ((_backend (eql sqlite)) file)
+  "Open SQLite-based cache."
+  (let* ((db-file (concat file ".db"))
+         (db (emacsql-sqlite-open db-file)))
+    ;; Create table if not exists
+    (emacsql db [:create-table-if-not-exists cache
+                 ([(id text :primary-key)
+                   (hash text)
+                   (output text)
+                   (project_hash text)
+                   (rule text)
+                   (rule_hash text)
+                   (compiler text)
+                   (compiler_hash text)])])
+    (porg-cache--create :backend 'sqlite :file db-file :data db)))
+
+;; Unified cache operations (dispatch based on backend)
+(cl-defmethod porg-cache-get ((cache porg-cache) id)
+  "Get value for ID from CACHE."
+  (pcase (porg-cache-backend cache)
+    ('file (gethash id (porg-cache-data cache)))
+    ('sqlite
+     (let ((row (car (emacsql (porg-cache-data cache)
+                              [:select [hash output project_hash rule rule_hash compiler compiler_hash]
+                               :from cache
+                               :where (= id $s1)]
+                              id))))
+       (when row
+         (porg-cache-item-create
+          :hash (nth 0 row)
+          :output (nth 1 row)
+          :project-hash (nth 2 row)
+          :rule (nth 3 row)
+          :rule-hash (nth 4 row)
+          :compiler (nth 5 row)
+          :compiler-hash (nth 6 row)))))))
+
+(cl-defmethod porg-cache-put ((cache porg-cache) id value)
+  "Put VALUE for ID into CACHE."
+  (pcase (porg-cache-backend cache)
+    ('file (puthash id value (porg-cache-data cache)))
+    ('sqlite
+     (emacsql (porg-cache-data cache)
+              [:insert-or-replace :into cache
+               :values $v1]
+              (vector id
+                      (porg-cache-item-hash value)
+                      (porg-cache-item-output value)
+                      (porg-cache-item-project-hash value)
+                      (porg-cache-item-rule value)
+                      (porg-cache-item-rule-hash value)
+                      (porg-cache-item-compiler value)
+                      (porg-cache-item-compiler-hash value))))))
+
+(cl-defmethod porg-cache-remove ((cache porg-cache) id)
+  "Remove ID from CACHE."
+  (pcase (porg-cache-backend cache)
+    ('file (remhash id (porg-cache-data cache)))
+    ('sqlite
+     (emacsql (porg-cache-data cache)
+              [:delete :from cache :where (= id $s1)]
+              id))))
+
+(cl-defmethod porg-cache-keys ((cache porg-cache))
+  "Return all keys in CACHE."
+  (pcase (porg-cache-backend cache)
+    ('file (hash-table-keys (porg-cache-data cache)))
+    ('sqlite
+     (mapcar #'car (emacsql (porg-cache-data cache)
+                            [:select id :from cache])))))
+
+(cl-defmethod porg-cache-sync ((cache porg-cache))
+  "Sync CACHE to persistent storage."
+  (pcase (porg-cache-backend cache)
+    ('file
+     (when (porg-cache-file cache)
+       (with-temp-file (porg-cache-file cache)
+         (let ((print-level nil)
+               (print-length nil))
+           (pcase porg-cache-file-method
+             (`pp (pp (porg-cache-data cache) (current-buffer)))
+             (`prin1 (prin1 (porg-cache-data cache) (current-buffer)))
+             (_ (prin1 (porg-cache-data cache) (current-buffer))))))))
+    ('sqlite
+     ;; SQLite writes are immediate, nothing to do
+     nil)))
+
+(cl-defmethod porg-cache-close ((cache porg-cache))
+  "Close CACHE and release resources."
+  (pcase (porg-cache-backend cache)
+    ('file (porg-cache-sync cache))
+    ('sqlite (emacsql-close (porg-cache-data cache)))))
+
+;; Convenience function for opening cache
+(defun porg-cache-open-default (file)
+  "Open cache at FILE using the configured backend."
+  (porg-cache-open porg-cache-backend file))
+
+;; Legacy compatibility functions
 (cl-defun porg-cache-query (cache id access)
-  "Query CACHE for ID by ACCESS."
-  (when-let ((o (gethash id cache)))
-    (funcall access o)))
+  "Query CACHE for ID by ACCESS.
+CACHE can be a hash-table (legacy) or porg-cache struct."
+  (let ((item (if (porg-cache-p cache)
+                  (porg-cache-get cache id)
+                (gethash id cache))))
+    (when item
+      (funcall access item))))
 
 (cl-defun porg-cache-load (file)
   "Load build cache from FILE.
-
-Return a hash table, where key is some string id of the build
-element and value its hash."
-  (if (file-exists-p file)
-      (pcase porg-cache-method
-        (`pp (with-temp-buffer
-               (condition-case nil
-	                 (progn
-	                   (insert-file-contents file)
-                     (read (current-buffer)))
-	               (error
-	                (message "Could not read cache from %s" file)))))
-        (`prin1 (with-temp-buffer
-                  (condition-case nil
-	                    (progn
-	                      (insert-file-contents file)
-                        (read (current-buffer)))
-	                  (error
-	                   (message "Could not read cache from %s" file)))))
-        (`json (with-temp-buffer
-                 (insert-file-contents file)
-                 (json-parse-buffer :object-type 'alist)))
-        (_ (user-error "Unsupported cache method: %s" porg-cache-method)))
-    (make-hash-table :test 'equal)))
+Return a porg-cache handle."
+  (porg-cache-open-default file))
 
 (cl-defun porg-cache-write (file cache)
-  "Write build CACHE to FILE."
-  (pcase porg-cache-method
-    (`pp (with-temp-file file
-           (let ((print-level nil)
-	               (print-length nil))
-             (pp cache (current-buffer)))))
-    (`prin1 (with-temp-file file
-              (let ((print-level nil)
-	                  (print-length nil))
-                (prin1 cache (current-buffer)))))
-    (`json (let ((json-encoding-pretty-print t))
-             (json-encode cache))
-           ;; (with-temp-file file
-           ;;   (insert (json-encode cache)))
-           )
-    (_ (user-error "Unsupported cache method: %s" porg-cache-method))))
+  "Write build CACHE to FILE.
+CACHE can be a hash-table (legacy) or porg-cache struct."
+  (if (porg-cache-p cache)
+      (porg-cache-sync cache)
+    ;; Legacy: raw hash-table
+    (with-temp-file file
+      (let ((print-level nil)
+            (print-length nil))
+        (pcase porg-cache-file-method
+          (`pp (pp cache (current-buffer)))
+          (_ (prin1 cache (current-buffer))))))))
 
 
 
@@ -437,7 +563,7 @@ and the time taken by garbage collection. See also
           (condition-case err
               (progn
                 (--each-indexed (plist-get plan :delete)
-                  (when-let* ((cached (gethash it cache))
+                  (when-let* ((cached (porg-cache-get cache it))
                               (compiler-name (porg-cache-item-compiler cached))
                               (compiler (--find (string-equal compiler-name (porg-compiler-name it))
                                                 (porg-project-compilers project))))
@@ -453,7 +579,7 @@ and the time taken by garbage collection. See also
                                (expand-file-name
                                 (porg-cache-item-output cached)
                                 (porg-project-root project))))
-                    (remhash it cache)))
+                    (porg-cache-remove cache it)))
                 ;; update cache after we cleaned everything
                 (porg-cache-write cache-file cache))
             (error
@@ -480,16 +606,16 @@ and the time taken by garbage collection. See also
                    (funcall describe item))
                   (when-let ((build (porg-compiler-build compiler)))
                     (funcall build item items cache))
-                  (puthash (porg-item-id item)
-                           (porg-cache-item-create
-                            :hash (porg-item-hash item)
-                            :output (porg-item-target-rel item)
-                            :project-hash project-hash
-                            :rule (porg-rule-name rule)
-                            :rule-hash (porg-sha1sum rule)
-                            :compiler (porg-compiler-name compiler)
-                            :compiler-hash (porg-sha1sum compiler))
-                           cache)
+                  (porg-cache-put cache
+                                  (porg-item-id item)
+                                  (porg-cache-item-create
+                                   :hash (porg-item-hash item)
+                                   :output (porg-item-target-rel item)
+                                   :project-hash project-hash
+                                   :rule (porg-rule-name rule)
+                                   :rule-hash (porg-sha1sum rule)
+                                   :compiler (porg-compiler-name compiler)
+                                   :compiler-hash (porg-sha1sum compiler)))
                   (when (and (> it-index 0)
                              (plist-get plan :build)
                              (= (% it-index 100) 0))
@@ -525,6 +651,7 @@ and the time taken by garbage collection. See also
             (funcall (porg-batch-rule-publish it) target items-selected items cache)))
 
         (porg-cache-write cache-file cache)
+        (porg-cache-close cache)
         (porg-log "The work is done! Enjoy your published vulpea notes!")
         (porg-log "        ٩(^ᴗ^)۶")))))
 
@@ -672,7 +799,7 @@ Result is a property list (:compile :delete)."
                                                 :size (hash-table-size items))))
                       (--each (hash-table-keys items)
                         (let* ((item (gethash it items))
-                               (cache-item (gethash it cache))
+                               (cache-item (porg-cache-get cache it))
                                (rule (porg-item-rule item))
                                (compiler (porg-item-compiler item)))
                           (puthash
@@ -748,7 +875,7 @@ Result is a property list (:compile :delete)."
                     (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
                         (string-equal target-old (porg-item-target-rel item))
                       item))
-                  (hash-table-keys cache))))
+                  (porg-cache-keys cache))))
 
     (porg-log "found %s items to compile." (seq-length build))
     (porg-log "found %s items to delete." (seq-length delete))
