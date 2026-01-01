@@ -513,6 +513,12 @@ CACHE can be a hash-table (legacy) or porg-cache struct."
           (`pp (pp cache (current-buffer)))
           (_ (prin1 cache (current-buffer))))))))
 
+(defun porg-cache-needs-sync-p (cache)
+  "Return non-nil if CACHE requires explicit sync to persist.
+File backend needs periodic sync; SQLite persists on each put."
+  (and (porg-cache-p cache)
+       (eq (porg-cache-backend cache) 'file)))
+
 
 
 (defmacro porg-benchmark-run (n fn &optional to-str &rest args)
@@ -594,11 +600,11 @@ and the time taken by garbage collection. See also
                                   (porg-project-root project))))
                       (porg-cache-remove cache it))))
                 ;; update cache after we cleaned everything
-                (unless porg-dry-run
+                (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
                   (porg-cache-write cache-file cache)))
             (error
              ;; on any error, still write out what we have so far
-             (unless porg-dry-run
+             (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
                (message "Cleanup failed, saving partial cache...")
                (porg-cache-write cache-file cache))
              (signal (car err) (cdr err)))))
@@ -638,8 +644,9 @@ and the time taken by garbage collection. See also
                                      project-hash porg-parallel)))
                         (when errors
                           (setq all-errors (append errors all-errors))))
-                      ;; Write cache after each level
-                      (porg-cache-write cache-file cache)))
+                      ;; Write cache after each level (file backend only)
+                      (when (porg-cache-needs-sync-p cache)
+                        (porg-cache-write cache-file cache))))
                   ;; Report any errors
                   (when all-errors
                     (porg-log "Build completed with %d errors:" (length all-errors))
@@ -672,17 +679,17 @@ and the time taken by garbage collection. See also
                                        :rule-hash (porg-sha1sum rule)
                                        :compiler (porg-compiler-name compiler)
                                        :compiler-hash (porg-sha1sum compiler)))
-                      (when (and (> it-index 0)
-                                 (plist-get plan :build)
+                      (when (and (porg-cache-needs-sync-p cache)
+                                 (> it-index 0)
                                  (= (% it-index 100) 0))
                         (porg-cache-write cache-file cache)))))
-                (unless porg-dry-run
-                  (when (plist-get plan :build)
-                    ;; update cache on success
-                    (porg-cache-write cache-file cache)))))
+                (when (and (not porg-dry-run)
+                           (porg-cache-needs-sync-p cache)
+                           (plist-get plan :build))
+                  (porg-cache-write cache-file cache))))
           (error
            ;; on any error, still write out what we have so far
-           (unless porg-dry-run
+           (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
              (message "Build failed, saving partial cache...")
              (porg-cache-write cache-file cache))
            (signal (car err) (cdr err))))
