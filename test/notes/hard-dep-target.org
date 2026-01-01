@@ -1,0 +1,6 @@
+:PROPERTIES:
+:ID:                     aaaaaaaa-0000-0000-0000-000000000001
+:END:
+#+title: Hard Dep Target
+
+I am a target for hard dependencies.

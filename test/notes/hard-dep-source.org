@@ -1,0 +1,7 @@
+:PROPERTIES:
+:ID:                     aaaaaaaa-0000-0000-0000-000000000002
+:HARD_DEP:               aaaaaaaa-0000-0000-0000-000000000001
+:END:
+#+title: Hard Dep Source
+
+I have a hard dependency on hard-dep-target.
