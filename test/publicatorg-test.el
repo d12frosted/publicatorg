@@ -456,7 +456,9 @@
        :file (or
               (vulpea-utils-with-note note
                 (vulpea-buffer-prop-get "output-file"))
-              (file-name-nondirectory (vulpea-note-path note))))))))
+              (file-name-nondirectory (vulpea-note-path note)))
+       :soft-deps (mapcar (lambda (l) (plist-get l :dest))
+                         (vulpea-note-links note)))))))
 
  :compilers
  (list
@@ -493,15 +495,18 @@
 (defun porg-test-init-in (dir)
   "Initialize testing environment in DIR."
   (setq org-roam-directory dir
-        org-roam-db-location (expand-file-name "org-roam.db" dir))
-  (vulpea-db-autosync-enable)
-  (org-roam-db-autosync-enable))
+        vulpea-db-location (expand-file-name "vulpea.db" dir)
+        vulpea-db-sync-directories (list dir)
+        vulpea-default-notes-directory dir)
+  (vulpea-db-autosync-mode +1)
+  ;; Force a blocking sync to populate the database
+  (vulpea-db-sync-update-directory dir t))
 
 (defun porg-test-teardown ()
   "Teardown testing environment."
-  (vulpea-db-autosync-disable)
-  (org-roam-db-autosync-disable)
-  (delete-file org-roam-db-location))
+  (vulpea-db-autosync-mode -1)
+  (when (file-exists-p vulpea-db-location)
+    (delete-file vulpea-db-location)))
 
 
 
@@ -515,45 +520,49 @@
 
   (it "should build every item on the first run"
     (porg-run "porg-test")
-    (expect 'porg-test-build-item :to-have-been-called-times 3))
+    ;; 5 notes: note-1, note-2, note-3, hard-dep-source, hard-dep-target
+    (expect 'porg-test-build-item :to-have-been-called-times 5))
 
   (it "should not call any build function when project is unchanged"
     (porg-run "porg-test")
     (expect 'porg-test-build-item :to-have-been-called-times 0))
 
   (it "should call build functions only for changed items"
-    (vulpea-utils-with-note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab")
-      (vulpea-buffer-meta-set "title" "yes")
-      (save-buffer))
+    (let ((note (vulpea-db-get-by-id "f3a5264e-963f-4059-b497-934d6e7df1ab")))
+      (vulpea-utils-with-note note
+        (vulpea-buffer-meta-set "title" "yes")
+        (save-buffer))
+      (vulpea-db-update-file (vulpea-note-path note)))
     (porg-run "porg-test")
     (expect 'porg-test-build-item :to-have-been-called-times 1))
 
   (it "should call build function for transitively changed item"
-    (vulpea-utils-with-note (vulpea-db-get-by-id "2801a0b7-53fe-4128-8ea3-0e6344c4c64c")
-      (vulpea-buffer-meta-set "dependants" "yes")
-      (save-buffer))
+    (let ((note (vulpea-db-get-by-id "2801a0b7-53fe-4128-8ea3-0e6344c4c64c")))
+      (vulpea-utils-with-note note
+        (vulpea-buffer-meta-set "dependants" "yes")
+        (save-buffer))
+      (vulpea-db-update-file (vulpea-note-path note)))
     (porg-run "porg-test")
     (expect 'porg-test-build-item :to-have-been-called-times 2))
 
   (it "should call build for newly created note"
     (vulpea-create "created note 1"
                    "created-note-1.org"
-                   :immediate-finish t)
+                   )
     (porg-run "porg-test")
     (expect 'porg-test-build-item :to-have-been-called-times 1))
 
   (it "should call cleanup for deleted note"
     (delete-file (expand-file-name "created-note-1.org" org-roam-directory))
+    (vulpea-db-sync--cleanup-deleted-files)
     (porg-run "porg-test")
     (expect 'porg-test-clean-item :to-have-been-called-times 1))
 
   (it "should rebuild an item when dependency is deleted"
     (let ((note-1 (vulpea-create "created dep note 1"
-                                 "created-dep-note-1.org"
-                                 :immediate-finish t)))
+                                 "created-dep-note-1.org")))
       (vulpea-create "created dep note 2"
                      "created-dep-note-2.org"
-                     :immediate-finish t
                      :body (concat "I depend on " (vulpea-utils-link-make-string note-1)))
       (porg-run "porg-test")
       (expect 'porg-test-build-item :to-have-been-called-times 2)
@@ -561,6 +570,7 @@
       (spy-calls-reset 'porg-test-build-item)
 
       (delete-file (vulpea-note-path note-1))
+      (vulpea-db-sync--cleanup-deleted-files)
       (porg-run "porg-test")
       (expect 'porg-test-clean-item :to-have-been-called-times 1)
       (expect 'porg-test-build-item :to-have-been-called-times 1)))
@@ -569,7 +579,7 @@
     (vulpea-create "Note 4"
                    "note-4.org"
                    :id "fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7"
-                   :immediate-finish t)
+                   )
     (porg-run "porg-test")
     ;; note-3 depends on previously non-existent fe2ba6c8-2af5-4bc7-a491-b5fadcb144e7
     (expect 'porg-test-build-item :to-have-been-called-times 2))
@@ -577,7 +587,7 @@
   (it "should delete and rebuild an item that changed output path"
     (let ((note (vulpea-create "Dancing note"
                                "dancing-note.org"
-                               :immediate-finish t)))
+                               )))
       (porg-run "porg-test")
       (expect 'porg-test-build-item :to-have-been-called-times 1)
 
