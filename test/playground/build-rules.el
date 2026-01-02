@@ -131,7 +131,7 @@ Uses extracted utility functions: porg-supported-media-p, porg-file-name-for-web
              (lambda (attach-name)
                (when (porg-supported-media-p attach-name)
                  (let* ((source-path (expand-file-name
-                                      (expand-file-name attach-name attach-dir)
+                                      (concat attach-dir "/" attach-name)
                                       notes-dir))
                         (output-name (porg-file-name-for-web attach-name)))
                    (porg-rule-output
