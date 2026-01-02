@@ -48,13 +48,6 @@
 In dry-run mode, no files are created, modified, or deleted, and
 the cache is not updated.")
 
-(defvar porg-parallel nil
-  "Control parallel builds.
-When nil, builds are sequential (default).
-When a positive integer, specifies the maximum number of parallel workers.
-Items that don't depend on each other can be built in parallel.
-Note: Requires Emacs 26+ for thread support.")
-
 (defvar porg-timing-enabled nil
   "When non-nil, collect timing information during builds.
 Use `porg-timing-report' to display results after a build.")
@@ -929,55 +922,16 @@ Returns the process object."
                  (porg-cache-write cache-file cache))
                (signal (car err) (cdr err))))))
 
-        (porg-log-s (cond
-                     (porg-dry-run "build (dry-run)")
-                     (porg-parallel (format "build (parallel, %d workers)" porg-parallel))
-                     (t "build")))
+        (porg-log-s (if porg-dry-run "build (dry-run)" "build"))
         (unless (plist-get plan :build)
           (porg-log "Nothing to build, everything is up to date."))
         (porg-timing-measure 'phase "build"
           (condition-case err
-              (if (and porg-parallel (not porg-dry-run) (plist-get plan :build))
-                  ;; Parallel build mode
-                  (let* ((build-ids (plist-get plan :build))
-                         (build-graph (--map (cons it (porg-item-hard-deps (gethash it items)))
-                                             build-ids))
-                         (levels (porg-topological-levels build-graph))
-                         (total-built 0)
-                         (all-errors nil))
-                    (porg-log "Building in %d parallel levels" (length levels))
-                    (dolist (level-ids levels)
-                      (let* ((level-items (--map (gethash it items) level-ids)))
-                        ;; Log items in this level
-                        (dolist (item level-items)
-                          (cl-incf total-built)
-                          (porg-log
-                           "[%s/%s] (%s:%s) building %s"
-                           (porg-string-from-number total-built :padding-num build-size)
-                           build-size
-                           (porg-rule-name (porg-item-rule item))
-                           (porg-compiler-name (porg-item-compiler item))
-                           (funcall describe item)))
-                        ;; Build level in parallel
-                        (let ((errors (porg--build-level-parallel
-                                       level-items items cache describe
-                                       project-hash porg-parallel)))
-                          (when errors
-                            (setq all-errors (append errors all-errors))))
-                        ;; Write cache after each level (file backend only)
-                        (when (porg-cache-needs-sync-p cache)
-                          (porg-cache-write cache-file cache))))
-                    ;; Report any errors
-                    (when all-errors
-                      (porg-log "Build completed with %d errors:" (length all-errors))
-                      (dolist (err all-errors)
-                        (porg-log "  %s: %s" (car err) (cdr err)))))
-                ;; Sequential/async build mode
-                (let* ((build-ids (plist-get plan :build))
-                       ;; Separate sync and async items
-                       (sync-items nil)
-                       (async-items nil)
-                       (async-enabled (and porg-async-max-jobs (not porg-dry-run))))
+              (let* ((build-ids (plist-get plan :build))
+                     ;; Separate sync and async items
+                     (sync-items nil)
+                     (async-items nil)
+                     (async-enabled (and porg-async-max-jobs (not porg-dry-run))))
                   ;; Categorize items
                   (dolist (id build-ids)
                     (let* ((item (gethash id items))
@@ -1048,7 +1002,7 @@ Returns the process object."
                   (when (and (not porg-dry-run)
                              (porg-cache-needs-sync-p cache)
                              build-ids)
-                    (porg-cache-write cache-file cache))))
+                    (porg-cache-write cache-file cache)))
             (error
              ;; on any error, still write out what we have so far
              (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
@@ -1104,73 +1058,6 @@ This is equivalent to (let ((porg-dry-run t)) (porg-run NAME))."
 This is equivalent to (let ((porg-timing-enabled t)) (porg-run NAME))."
   (let ((porg-timing-enabled t))
     (porg-run name)))
-
-(defvar porg--build-mutex nil
-  "Mutex for thread-safe cache updates during parallel builds.")
-
-(defun porg--build-item (item items cache _describe project-hash cache-mutex)
-  "Build a single ITEM with thread safety.
-ITEMS is the hash table of all items.
-CACHE is the build cache.
-PROJECT-HASH is the project hash.
-CACHE-MUTEX is the mutex for cache updates (nil for sequential builds)."
-  (let* ((rule (porg-item-rule item))
-         (compiler (porg-item-compiler item)))
-    (condition-case err
-        (progn
-          (when-let* ((build (porg-compiler-build compiler)))
-            (funcall build item items cache))
-          (let ((cache-entry (porg-cache-item-create
-                              :hash (porg-item-hash item)
-                              :output (porg-item-target-rel item)
-                              :project-hash project-hash
-                              :rule (porg-rule-name rule)
-                              :rule-hash (porg-sha1sum rule)
-                              :compiler (porg-compiler-name compiler)
-                              :compiler-hash (porg-sha1sum compiler))))
-            (if cache-mutex
-                (with-mutex cache-mutex
-                  (porg-cache-put cache (porg-item-id item) cache-entry))
-              (porg-cache-put cache (porg-item-id item) cache-entry)))
-          nil) ; return nil for success
-      (error
-       (cons (porg-item-id item) err))))) ; return error info
-
-(defun porg--build-level-parallel (level items cache describe project-hash max-workers)
-  "Build ITEMS in LEVEL in parallel with at most MAX-WORKERS threads.
-Returns list of errors (each is (id . error))."
-  (let* ((mutex (make-mutex "porg-build"))
-         (threads nil)
-         (errors nil)
-         (errors-mutex (make-mutex "porg-errors"))
-         (semaphore (make-mutex "porg-semaphore"))
-         (running 0))
-    ;; Start threads for each item, respecting max-workers
-    (dolist (item level)
-      ;; Wait if we're at max capacity
-      (while (>= running max-workers)
-        (thread-yield)
-        (sleep-for 0.01))
-      ;; Start a new thread
-      (with-mutex semaphore
-        (cl-incf running))
-      (push
-       (make-thread
-        (lambda ()
-          (unwind-protect
-              (let ((err (porg--build-item item items cache describe project-hash mutex)))
-                (when err
-                  (with-mutex errors-mutex
-                    (push err errors))))
-            (with-mutex semaphore
-              (cl-decf running)))))
-       threads))
-    ;; Wait for all threads to complete
-    (dolist (thread threads)
-      (thread-join thread))
-    errors))
-
-
 
 (cl-defstruct (porg-item (:constructor porg-item-create)
                          (:copier nil))
