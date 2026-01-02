@@ -336,9 +336,10 @@ SOFT-DEPS is a function (note -> list) returning soft dependencies.
 
 HARD-DEPS is a function (note -> list) returning hard dependencies.
 
-OUTPUTS-EXTRA is a function (note-output -> list) that takes the
-note output and returns additional outputs (e.g., JSON files).
-These extra outputs can declare their own dependencies.
+OUTPUTS-EXTRA is a function (note-output -> list) that takes a
+preliminary note output (with ID and file, but no deps) and returns
+additional outputs (e.g., JSON files). These extra outputs can
+declare their own dependencies.
 
 Returns a function suitable for use as :outputs in `porg-rule'.
 
@@ -347,33 +348,37 @@ Dependency behavior:
 - Extra outputs with type \"attachment\" are also added as hard deps
 - This ensures attachments are built before the note that references them"
   (lambda (note)
-    (let* ((note-output (porg-note-output note :file (funcall file note)))
-           (attachments-output
+    (let* ((file-path (funcall file note))
+           ;; Create preliminary note-output for outputs-extra callback
+           (note-output-preview (porg-note-output note :file file-path))
+           (attachment-outputs
             (when attach-dir
               (porg-attachments-output
                note
-               :dir (lambda (attachment)
+               :dir (lambda (_attachment)
                       (funcall attach-dir note))
                :file-mod (or attach-file-mod (list #'porg-file-name-for-web))
                :filter (or attach-filter #'porg-supported-media-p))))
-           (outputs-extra (when outputs-extra
-                            (funcall outputs-extra note-output))))
+           (extra-outputs (when outputs-extra
+                            (funcall outputs-extra note-output-preview)))
+           (extra-attachment-ids
+            (mapcar #'porg-rule-output-id
+                    (seq-filter
+                     (lambda (it)
+                       (string-equal (porg-rule-output-type it) "attachment"))
+                     extra-outputs))))
       (append
-       attachments-output
-       outputs-extra
+       attachment-outputs
+       extra-outputs
        (list
         (porg-note-output
          note
-         :file (funcall file note)
+         :file file-path
          :soft-deps (when soft-deps (funcall soft-deps note))
          :hard-deps (append
                      (when hard-deps (funcall hard-deps note))
-                     (mapcar #'porg-rule-output-id attachments-output)
-                     (mapcar #'porg-rule-output-id
-                             (seq-filter
-                              (lambda (it)
-                                (string-equal (porg-rule-output-type it) "attachment"))
-                              outputs-extra)))))))))
+                     (mapcar #'porg-rule-output-id attachment-outputs)
+                     extra-attachment-ids)))))))
 
 
 (cl-defstruct (porg-batch-rule (:constructor porg-batch-rule)
