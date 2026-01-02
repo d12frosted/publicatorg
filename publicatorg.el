@@ -1772,6 +1772,97 @@ If OBJECT is not a struct, it calls ORIG-FUN."
 (advice-add 'json--print :around #'porg-json-print-wrapper)
 
 
+;; * Built-in compilers
+
+(defvar porg-images-max-width 1600
+  "Default maximum width for image resizing.
+Images wider than this will be resized to this width.")
+
+(defvar porg-images-quality 75
+  "Default quality for cwebp compression (0-100).")
+
+(defun porg-images-hash-default (obj)
+  "Default hash function for images compiler.
+Uses file modification time and size for OBJ."
+  (when (porg-rule-output-p obj)
+    (let ((file (porg-rule-output-item obj)))
+      (when (file-exists-p file)
+        (let ((attrs (file-attributes file)))
+          (porg-sha1sum (list (file-attribute-modification-time attrs)
+                              (file-attribute-size attrs))))))))
+
+(cl-defun porg-images-compiler (&key (max-width porg-images-max-width)
+                                     (quality porg-images-quality)
+                                     (hash #'porg-images-hash-default))
+  "Create an images compiler with configurable options.
+
+MAX-WIDTH is the maximum image width (default `porg-images-max-width').
+QUALITY is the cwebp quality 0-100 (default `porg-images-quality').
+HASH is the hash function (default `porg-images-hash-default').
+
+Uses cwebp + sips for fast image processing, with magick fallback."
+  (porg-compiler
+   :name "images"
+   :match (-rpartial #'porg-rule-output-that
+                     :type "attachment"
+                     :predicate #'porg-supported-image-p)
+   :hash hash
+   :build
+   (lambda (item _items _cache)
+     (make-directory (file-name-directory (porg-item-target-abs item)) 'parents)
+     (if (porg-convertible-image-p (porg-item-item item))
+         (let* ((input (porg-item-item item))
+                (output (porg-item-target-abs item))
+                (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
+                                    max-width))
+                (width (string-to-number
+                        (shell-command-to-string
+                         (format "sips -g pixelWidth '%s' 2>/dev/null | awk '/pixelWidth/{print $2}'"
+                                 input)))))
+           (if (> width item-max-width)
+               (unless (zerop (call-process-shell-command
+                               (format "cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null"
+                                       quality item-max-width input output)))
+                 (shell-command-to-string
+                  (format "magick '%s' -strip -auto-orient -resize %dx100^ '%s'"
+                          input item-max-width output)))
+             (unless (zerop (call-process-shell-command
+                             (format "cwebp -q %d '%s' -o '%s' 2>/dev/null"
+                                     quality input output)))
+               (shell-command-to-string
+                (format "magick '%s' -strip -auto-orient '%s'" input output)))))
+       (copy-file (porg-item-item item) (porg-item-target-abs item) t)))
+   :async-build
+   (lambda (item _items _cache callback)
+     (make-directory (file-name-directory (porg-item-target-abs item)) 'parents)
+     (if (porg-convertible-image-p (porg-item-item item))
+         (let* ((input (porg-item-item item))
+                (output (porg-item-target-abs item))
+                (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
+                                    max-width))
+                (cmd (format "set -e; \
+if [ ! -f '%s' ]; then echo 'Source file not found: %s' >&2; exit 1; fi; \
+width=$(sips -g pixelWidth '%s' 2>/dev/null | awk '/pixelWidth/{print $2}'); \
+if [ \"$width\" -gt %d ]; then \
+  cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null || \
+    magick '%s' -strip -auto-orient -resize %dx100^ '%s'; \
+else \
+  cwebp -q %d '%s' -o '%s' 2>/dev/null || \
+    magick '%s' -strip -auto-orient '%s'; \
+fi"
+                             input input
+                             input item-max-width
+                             quality item-max-width input output
+                             input item-max-width output
+                             quality input output
+                             input output)))
+           (porg-async-shell-command cmd callback (file-name-nondirectory output)))
+       ;; Non-convertible: just copy
+       (copy-file (porg-item-item item) (porg-item-target-abs item) t)
+       (funcall callback t nil)
+       nil))
+   :clean #'porg-delete-with-metadata))
+
 
 (provide 'publicatorg)
 ;;; publicatorg.el ends here
