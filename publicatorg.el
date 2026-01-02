@@ -1386,6 +1386,29 @@ All other links are transformed to plain text."
                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
            it))))
 
+(cl-defun porg-sanitize-id-link (link items &key (content-prefix ""))
+  "Sanitize ID LINK according to ITEMS.
+
+ITEMS is a hash table mapping note IDs to `porg-item' structs.
+CONTENT-PREFIX is the prefix to strip from the target path (e.g.,
+\"src/public/content\" or \"public/content\").
+
+If the link points to a note in ITEMS, transforms it to a file link
+with the appropriate path. Otherwise, converts the link to plain text."
+  (if-let* ((id (org-ml-get-property :path link))
+            (note (vulpea-db-get-by-id id))
+            (item (gethash id items))
+            (file (porg-item-target-rel item))
+            (path (->> file
+                       (s-chop-suffix ".org")
+                       (s-chop-suffix ".md")
+                       (s-chop-prefix content-prefix))))
+      (->> link
+           (org-ml-set-property :type "file")
+           (org-ml-set-property :path path))
+    (org-ml-from-string
+     'plain-text
+     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))
 
 
 ;; Logging utilities
