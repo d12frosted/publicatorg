@@ -59,6 +59,10 @@ Note: Requires Emacs 26+ for thread support.")
   "When non-nil, collect timing information during builds.
 Use `porg-timing-report' to display results after a build.")
 
+(defvar porg-async-max-jobs 8
+  "Maximum number of parallel async compiler jobs.
+Set to nil to disable async compilation entirely.")
+
 (defvar porg-timing-results nil
   "Accumulated timing results from the last build.
 Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
@@ -247,10 +251,21 @@ When IGNORE-RULES is non-nil, rules do not depend on resulting hash."
   "Define a compiler for `porg-rule-output'.
 
 MATCH is a predicate on `porg-rule-output' that control which
-items are build using this rule."
+items are build using this rule.
+
+BUILD is a synchronous function (item items cache) that builds the item.
+
+ASYNC-BUILD is an optional async alternative to BUILD. If provided,
+it should be a function (item items cache callback) that starts an
+async process and calls CALLBACK with (success error-msg) when done.
+The async-build function should return the process object.
+
+When ASYNC-BUILD is provided, the build loop will use it instead of
+BUILD and run multiple items in parallel (up to `porg-async-max-jobs')."
   (name nil :read-only t :type string)
   (match nil :read-only t :type function)
   (build nil :read-only t :type function)
+  (async-build nil :read-only t :type function)
   (clean nil :read-only t :type function)
   (hash nil :read-only t :type function))
 
@@ -749,6 +764,102 @@ and the time taken by garbage collection. See also
     v))
 
 
+;; Async build support
+
+(defvar porg--async-running 0
+  "Number of currently running async jobs.")
+
+(defvar porg--async-errors nil
+  "List of errors from async builds. Each element is (item-id . error-msg).")
+
+(defvar porg--async-completed 0
+  "Number of completed async jobs in current batch.")
+
+(defvar porg--async-total 0
+  "Total number of async jobs in current batch.")
+
+(defun porg--async-build-batch (async-items items cache _describe project-hash)
+  "Build ASYNC-ITEMS using async compilers with limited concurrency.
+ITEMS is the full items hash-table, CACHE is the build cache,
+DESCRIBE is the describe function, PROJECT-HASH is the project hash.
+Returns list of errors (each is (item-id . error-msg))."
+  (setq porg--async-running 0
+        porg--async-errors nil
+        porg--async-completed 0
+        porg--async-total (length async-items))
+
+  (let ((pending (copy-sequence async-items))
+        (max-jobs (or porg-async-max-jobs 8)))
+
+    ;; Process items, respecting max concurrency
+    (while (or pending (> porg--async-running 0))
+      ;; Start new jobs if we have capacity
+      (while (and pending (< porg--async-running max-jobs))
+        (let* ((item (pop pending))
+               (compiler (porg-item-compiler item))
+               (async-build (porg-compiler-async-build compiler))
+               (item-id (porg-item-id item))
+               (start-time (float-time)))
+
+          (cl-incf porg--async-running)
+
+          ;; Start the async process
+          (funcall async-build item items cache
+                   (lambda (success error-msg)
+                     ;; Callback when process completes
+                     (cl-decf porg--async-running)
+                     (cl-incf porg--async-completed)
+
+                     ;; Record timing
+                     (when porg-timing-enabled
+                       (porg-timing-record-compiler
+                        (porg-compiler-name compiler)
+                        (- (float-time) start-time)))
+
+                     (if success
+                         ;; Update cache on success
+                         (let ((rule (porg-item-rule item)))
+                           (porg-cache-put cache item-id
+                                           (porg-cache-item-create
+                                            :hash (porg-item-hash item)
+                                            :output (porg-item-target-rel item)
+                                            :project-hash project-hash
+                                            :rule (porg-rule-name rule)
+                                            :rule-hash (porg-sha1sum rule)
+                                            :compiler (porg-compiler-name compiler)
+                                            :compiler-hash (porg-sha1sum compiler))))
+                       ;; Record error
+                       (push (cons item-id error-msg) porg--async-errors))))))
+
+      ;; Wait a bit before checking again
+      (when (> porg--async-running 0)
+        (accept-process-output nil 0.01)))
+
+    porg--async-errors))
+
+(defun porg-async-shell-command (command callback &optional name)
+  "Run COMMAND asynchronously and call CALLBACK when done.
+CALLBACK is called with (success error-msg).
+NAME is an optional process name.
+Returns the process object."
+  (let* ((buf (generate-new-buffer (format " *porg-async-%s*" (or name "cmd"))))
+         (proc (start-process-shell-command
+                (or name "porg-async")
+                buf
+                command)))
+    (set-process-sentinel
+     proc
+     (lambda (process _event)
+       (when (memq (process-status process) '(exit signal))
+         (let ((success (= (process-exit-status process) 0))
+               (error-msg nil))
+           (unless success
+             (with-current-buffer (process-buffer process)
+               (setq error-msg (buffer-string))))
+           (kill-buffer (process-buffer process))
+           (funcall callback success error-msg)))))
+    proc))
+
 
 ;;;###autoload
 (defun porg-run (name)
@@ -856,42 +967,82 @@ and the time taken by garbage collection. See also
                       (porg-log "Build completed with %d errors:" (length all-errors))
                       (dolist (err all-errors)
                         (porg-log "  %s: %s" (car err) (cdr err)))))
-                ;; Sequential build mode (original behavior)
-                (progn
-                  (--each-indexed (plist-get plan :build)
-                    (let* ((item (gethash it items))
-                           (rule (porg-item-rule item))
-                           (compiler (porg-item-compiler item))
-                           (compiler-name (porg-compiler-name compiler)))
-                      (porg-log
-                       "[%s/%s]%s (%s:%s) building %s"
-                       (porg-string-from-number (+ 1 it-index) :padding-num build-size)
-                       build-size
-                       (if porg-dry-run " [dry-run]" "")
-                       (porg-rule-name rule)
-                       compiler-name
-                       (funcall describe item))
-                      (unless porg-dry-run
-                        (when-let* ((build (porg-compiler-build compiler)))
-                          (porg-timing-measure 'compiler compiler-name
-                            (funcall build item items cache)))
-                        (porg-cache-put cache
-                                        (porg-item-id item)
-                                        (porg-cache-item-create
-                                         :hash (porg-item-hash item)
-                                         :output (porg-item-target-rel item)
-                                         :project-hash project-hash
-                                         :rule (porg-rule-name rule)
-                                         :rule-hash (porg-sha1sum rule)
-                                         :compiler compiler-name
-                                         :compiler-hash (porg-sha1sum compiler)))
-                        (when (and (porg-cache-needs-sync-p cache)
-                                   (> it-index 0)
-                                   (= (% it-index 100) 0))
-                          (porg-cache-write cache-file cache)))))
+                ;; Sequential/async build mode
+                (let* ((build-ids (plist-get plan :build))
+                       ;; Separate sync and async items
+                       (sync-items nil)
+                       (async-items nil)
+                       (async-enabled (and porg-async-max-jobs (not porg-dry-run))))
+                  ;; Categorize items
+                  (dolist (id build-ids)
+                    (let* ((item (gethash id items))
+                           (compiler (porg-item-compiler item)))
+                      (if (and async-enabled (porg-compiler-async-build compiler))
+                          (push item async-items)
+                        (push item sync-items))))
+                  (setq sync-items (nreverse sync-items))
+                  (setq async-items (nreverse async-items))
+
+                  ;; Log what we're doing
+                  (when (and async-items (not porg-dry-run))
+                    (porg-log "Building %d items async (%d jobs max), %d items sync"
+                              (length async-items) porg-async-max-jobs (length sync-items)))
+
+                  ;; Build sync items first
+                  (let ((sync-index 0))
+                    (dolist (item sync-items)
+                      (let* ((rule (porg-item-rule item))
+                             (compiler (porg-item-compiler item))
+                             (compiler-name (porg-compiler-name compiler)))
+                        (cl-incf sync-index)
+                        (porg-log
+                         "[%s/%s]%s (%s:%s) building %s"
+                         (porg-string-from-number sync-index :padding-num build-size)
+                         build-size
+                         (if porg-dry-run " [dry-run]" "")
+                         (porg-rule-name rule)
+                         compiler-name
+                         (funcall describe item))
+                        (unless porg-dry-run
+                          (when-let* ((build (porg-compiler-build compiler)))
+                            (porg-timing-measure 'compiler compiler-name
+                              (funcall build item items cache)))
+                          (porg-cache-put cache
+                                          (porg-item-id item)
+                                          (porg-cache-item-create
+                                           :hash (porg-item-hash item)
+                                           :output (porg-item-target-rel item)
+                                           :project-hash project-hash
+                                           :rule (porg-rule-name rule)
+                                           :rule-hash (porg-sha1sum rule)
+                                           :compiler compiler-name
+                                           :compiler-hash (porg-sha1sum compiler)))))))
+
+                  ;; Build async items in parallel
+                  (when (and async-items (not porg-dry-run))
+                    ;; Log async items
+                    (let ((async-index (length sync-items)))
+                      (dolist (item async-items)
+                        (cl-incf async-index)
+                        (porg-log
+                         "[%s/%s] (%s:%s) [async] %s"
+                         (porg-string-from-number async-index :padding-num build-size)
+                         build-size
+                         (porg-rule-name (porg-item-rule item))
+                         (porg-compiler-name (porg-item-compiler item))
+                         (funcall describe item))))
+                    ;; Run async batch
+                    (let ((errors (porg--async-build-batch
+                                   async-items items cache describe project-hash)))
+                      (when errors
+                        (porg-log "Async build completed with %d errors:" (length errors))
+                        (dolist (err errors)
+                          (porg-log "  %s: %s" (car err) (cdr err))))))
+
+                  ;; Sync cache
                   (when (and (not porg-dry-run)
                              (porg-cache-needs-sync-p cache)
-                             (plist-get plan :build))
+                             build-ids)
                     (porg-cache-write cache-file cache))))
             (error
              ;; on any error, still write out what we have so far
