@@ -102,7 +102,7 @@ ARGS are used to construct project."
            (porg-compiler
             :name "$$void$$"
             :match (-rpartial #'porg-rule-output-that :type "$$void$$"))))
-    (if-let ((val (assoc name porg--projects)))
+    (if-let* ((val (assoc name porg--projects)))
         (setf (cdr val) project)
       (setf porg--projects (cons (cons name project) porg--projects)))
     project))
@@ -121,14 +121,14 @@ When IGNORE-RULES is non-nil, rules do not depend on resulting hash."
   "Resolve rule for NOTE from PROJECT."
   (->> (porg-project-rules project)
        (-filter #'porg-rule-p)
-       (--filter (when-let ((match (porg-rule-match it)))
+       (--filter (when-let* ((match (porg-rule-match it)))
                    (funcall match note)))))
 
 (cl-defmethod porg-project-resolve-compiler ((project porg-project) output)
   "Resolve compiler for OUTPUT from PROJECT."
   (-find
    (lambda (compiler)
-     (when-let ((match (porg-compiler-match compiler)))
+     (when-let* ((match (porg-compiler-match compiler)))
        (funcall match output)))
    (-filter #'porg-compiler-p (porg-project-compilers project))))
 
@@ -411,15 +411,15 @@ Can be one of:
 - `file' - serialize to a file using `porg-cache-file-method'
 - `sqlite' - use SQLite database for incremental updates")
 
+;; Legacy alias for backward compatibility - must be before defvar
+(define-obsolete-variable-alias 'porg-cache-method 'porg-cache-file-method "0.1")
+
 (defvar porg-cache-file-method 'pp
   "Serialization method for file-based cache.
 
 Can be one of:
 - `pp' - pretty print as Lisp object (human and git-friendly, but slow)
 - `prin1' - compact Lisp object (fast, but single line)")
-
-;; Legacy alias for backward compatibility
-(defvaralias 'porg-cache-method 'porg-cache-file-method)
 
 (cl-defstruct (porg-cache-item (:constructor porg-cache-item-create))
   (hash nil :type string)
@@ -713,8 +713,7 @@ and the time taken by garbage collection. See also
                        (all-errors nil))
                   (porg-log "Building in %d parallel levels" (length levels))
                   (dolist (level-ids levels)
-                    (let* ((level-items (--map (gethash it items) level-ids))
-                           (level-size (length level-items)))
+                    (let* ((level-items (--map (gethash it items) level-ids)))
                       ;; Log items in this level
                       (dolist (item level-items)
                         (cl-incf total-built)
@@ -823,11 +822,10 @@ This is equivalent to (let ((porg-dry-run t)) (porg-run NAME))."
 (defvar porg--build-mutex nil
   "Mutex for thread-safe cache updates during parallel builds.")
 
-(defun porg--build-item (item items cache describe project-hash cache-mutex)
+(defun porg--build-item (item items cache _describe project-hash cache-mutex)
   "Build a single ITEM with thread safety.
 ITEMS is the hash table of all items.
 CACHE is the build cache.
-DESCRIBE is the describe function.
 PROJECT-HASH is the project hash.
 CACHE-MUTEX is the mutex for cache updates (nil for sequential builds)."
   (let* ((rule (porg-item-rule item))
@@ -948,18 +946,18 @@ Throws a user error if any of the input has no matching rule."
           (setq logf #'porg-log)
         (setq logf #'porg-debug))
       (funcall logf "- outputs of %s:" (funcall describe it))
-      (if-let ((rules (porg-project-resolve-rules project it)))
+      (if-let* ((rules (porg-project-resolve-rules project it)))
           (-each rules
             (lambda (rule)
-              (--each (when-let ((outputs-fn (porg-rule-outputs rule)))
+              (--each (when-let* ((outputs-fn (porg-rule-outputs rule)))
                         (funcall outputs-fn it))
                 (funcall logf "  - [%s] %s" (porg-rule-name rule) (funcall describe it))
-                (if-let ((compiler (porg-project-resolve-compiler project it)))
+                (if-let* ((compiler (porg-project-resolve-compiler project it)))
                     (let* ((target-rel (porg-rule-output-file it))
                            (target-abs (when target-rel
                                          (expand-file-name target-rel (porg-project-root project)))))
                       (when porg-detect-output-clashes
-                        (when-let ((old (gethash (porg-rule-output-id it) tbl)))
+                        (when-let* ((old (gethash (porg-rule-output-id it) tbl)))
                           (user-error "Clash of output items by id '%s'" (porg-rule-output-id it))))
                       (funcall logf "    - rel: %s" target-rel)
                       (funcall logf "    - abs: %s" target-abs)
@@ -1005,9 +1003,9 @@ Throws a user error if any of the input has no matching rule."
         (porg-log "- %s" (funcall describe it)))
       (user-error "Not all items have matching compilers, see above"))
 
-    (when-let ((missing (--filter
-                         (--remove (gethash it tbl) (porg-item-hard-deps it))
-                         (hash-table-values tbl))))
+    (when-let* ((missing (--filter
+                          (--remove (gethash it tbl) (porg-item-hard-deps it))
+                          (hash-table-values tbl))))
       (porg-log "could not find dependencies for %s items" (seq-length missing))
       (-each missing
         (lambda (item)
@@ -1025,7 +1023,8 @@ Throws a user error if any of the input has no matching rule."
 
 Result is a property list (:compile :delete)."
   (let* ((describe (porg-project-describe project))
-         (project-hash (porg-project-hash project 'ignore-rules))
+         ;; project-hash currently unused - was for project-level cache invalidation
+         ;; (_project-hash (porg-project-hash project 'ignore-rules))
          (build-map (let ((tbl (make-hash-table :test 'equal
                                                 :size (hash-table-size items))))
                       (--each (hash-table-keys items)
@@ -1103,7 +1102,7 @@ Result is a property list (:compile :delete)."
                   build-raw))
          (delete (--remove
                   (when-let* ((item (gethash it items)))
-                    (if-let ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
+                    (if-let* ((target-old (porg-cache-query cache (porg-item-id item) #'porg-cache-item-output)))
                         (string-equal target-old (porg-item-target-rel item))
                       item))
                   (porg-cache-keys cache))))
