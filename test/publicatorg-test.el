@@ -229,7 +229,7 @@
 (describe "porg-file-name-sanitize"
   (it "replaces special chars with dashes"
     (expect (porg-file-name-sanitize "my file (1).jpg" "webp")
-            :to-equal "my-file--1-.webp"))
+            :to-equal "my-file-1.webp"))
 
   (it "preserves alphanumeric chars"
     (expect (porg-file-name-sanitize "simple123.png" "webp")
@@ -241,7 +241,19 @@
 
   (it "handles multiple dots"
     (expect (porg-file-name-sanitize "file.name.with.dots.jpg" "webp")
-            :to-equal "file.name.with.dots.webp")))
+            :to-equal "file.name.with.dots.webp"))
+
+  (it "collapses consecutive dashes"
+    (expect (porg-file-name-sanitize "hello   world.jpg" "webp")
+            :to-equal "hello-world.webp")
+    (expect (porg-file-name-sanitize "a!!!b.jpg" "webp")
+            :to-equal "a-b.webp"))
+
+  (it "removes leading and trailing dashes from basename"
+    (expect (porg-file-name-sanitize "(test).jpg" "webp")
+            :to-equal "test.webp")
+    (expect (porg-file-name-sanitize "path/to/(test).jpg" "webp")
+            :to-equal "path/to/test.webp")))
 
 (describe "porg-file-name-for-web"
   (it "converts convertible images to webp"
@@ -258,7 +270,7 @@
 
   (it "sanitizes file names while converting"
     (expect (porg-file-name-for-web "My Photo (1).jpg")
-            :to-equal "My-Photo--1-.webp")))
+            :to-equal "My-Photo-1.webp")))
 
 (describe "porg-file-name-replace-ext"
   (it "replaces extension"

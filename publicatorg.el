@@ -1456,12 +1456,20 @@ hash-table test, defaulting to `equal`."
 
 (defun porg-file-name-sanitize (file-name new-ext)
   "Sanitize FILE-NAME by replacing non-alphanumeric chars and setting NEW-EXT.
-Non-alphanumeric characters (except / and .) are replaced with dashes."
-  (let ((ext-old (file-name-extension file-name)))
-    (concat (replace-regexp-in-string
-             "[^a-zA-Z0-9/\\.]" "-"
-             (string-remove-suffix (concat "." ext-old) file-name))
-            "." new-ext)))
+Non-alphanumeric characters (except / and .) are replaced with dashes.
+Consecutive dashes are collapsed, and leading/trailing dashes are removed
+from the basename."
+  (let* ((ext-old (file-name-extension file-name))
+         (without-ext (string-remove-suffix (concat "." ext-old) file-name))
+         (dir (file-name-directory without-ext))
+         (base (file-name-nondirectory without-ext))
+         ;; Replace special chars with dashes
+         (base-sanitized (replace-regexp-in-string "[^a-zA-Z0-9.]" "-" base))
+         ;; Collapse consecutive dashes
+         (base-collapsed (replace-regexp-in-string "-+" "-" base-sanitized))
+         ;; Remove leading/trailing dashes
+         (base-trimmed (replace-regexp-in-string "^-\\|-$" "" base-collapsed)))
+    (concat dir base-trimmed "." new-ext)))
 
 (defun porg-file-name-for-web (file-name)
   "Convert FILE-NAME to web-friendly format.
