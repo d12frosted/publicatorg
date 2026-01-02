@@ -1096,12 +1096,44 @@ This is equivalent to (let ((porg-timing-enabled t)) (porg-run NAME))."
 
 
 (cl-defmethod porg-describe ((thing porg-item))
-  "Describe THING."
-  (format "(item %s) %s" (porg-item-type thing) (porg-item-id thing)))
+  "Describe THING.
+For items, provides type-specific descriptions:
+- note: delegates to the item's describe method
+- attachment: shows media type (image/video) and filename
+- other: shows type and id"
+  (pcase (porg-item-type thing)
+    ("note" (porg-describe (porg-item-item thing)))
+    ("attachment"
+     (let ((target (porg-item-target-abs thing)))
+       (concat "("
+               (cond
+                ((porg-supported-image-p target) "image")
+                ((porg-supported-video-p target) "video")
+                (t "attachment"))
+               ") "
+               (file-name-nondirectory target))))
+    (_ (format "(%s) %s" (porg-item-type thing) (porg-item-id thing)))))
 
 (cl-defmethod porg-describe ((thing porg-rule-output))
-  "Describe THING."
-  (format "(output %s) %s" (porg-rule-output-type thing) (porg-rule-output-id thing)))
+  "Describe THING.
+For rule outputs, provides type-specific descriptions:
+- note: delegates to the item's describe method
+- attachment: shows media type (image/video) and filename
+- json: shows as (json) with delegated description
+- other: shows type and id"
+  (pcase (porg-rule-output-type thing)
+    ("note" (porg-describe (porg-rule-output-item thing)))
+    ("attachment"
+     (let ((file (porg-rule-output-file thing)))
+       (concat "("
+               (cond
+                ((porg-supported-image-p file) "image")
+                ((porg-supported-video-p file) "video")
+                (t "attachment"))
+               ") "
+               (file-name-nondirectory file))))
+    ("json" (concat "(json) " (porg-describe (porg-rule-output-item thing))))
+    (_ (format "(%s) %s" (porg-rule-output-type thing) (porg-rule-output-id thing)))))
 
 
 
