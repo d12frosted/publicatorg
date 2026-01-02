@@ -1880,5 +1880,143 @@ HASH is the hash function (default `porg-images-hash-default')."
    :clean #'porg-delete-with-metadata))
 
 
+;; * Org to Markdown publishing
+
+(defun porg-clean-org-for-pandoc ()
+  "Clean current org buffer for pandoc conversion.
+
+Performs the following cleanups:
+- Removes table captions that precede #+results:
+- Adds #+attr_html: :class image before file links that have captions
+- Converts verse blocks to HTML blockquotes"
+  ;; table captions are not supported
+  (save-excursion
+    (goto-char (point-min))
+    (while (search-forward-regexp "^#\\+caption:" nil t)
+      (when (save-excursion
+              (forward-line)
+              (looking-at "^#\\+results:"))
+        (beginning-of-line)
+        (kill-line 1))))
+
+  ;; pandoc fails to properly handle caption when attr_html is missing
+  (save-excursion
+    (goto-char (point-min))
+    (while (search-forward-regexp "^#\\+caption:" nil t)
+      (forward-line)
+      (when (looking-at "\\[\\[file.*\\]\\]")
+        (insert "#+attr_html: :class image\n"))))
+
+  ;; verses are not supported by pandoc
+  (save-excursion
+    (goto-char (point-min))
+    (while (search-forward-regexp "^#\\+begin_verse" nil t)
+      (replace-match "#+begin_export html")
+      (forward-line)
+      (insert "<blockquote>\n")
+      (while (not (looking-at "^#\\+end_verse"))
+        ;; replace ---
+        (when (looking-at "---")
+          (replace-match "–")
+          (beginning-of-line))
+
+        ;; add line break
+        (end-of-line)
+        (insert "<br/>")
+        (forward-line))
+      (kill-line)
+
+      ;; done
+      (insert "</blockquote>\n")
+      (insert "#+end_export"))))
+
+(defun porg-clean-markdown-for-web (&optional video-check-fn)
+  "Clean current markdown buffer for web publishing.
+
+VIDEO-CHECK-FN is a function that returns t if a path is a video.
+Defaults to `porg-supported-video-p'.
+
+Performs the following cleanups:
+- Removes file:// prefixes from links
+- Converts video links from text links to image syntax"
+  (let ((video-check-fn (or video-check-fn #'porg-supported-video-p)))
+    ;; fix attachment links
+    (goto-char (point-min))
+    (while (search-forward "file://" nil t)
+      (replace-match ""))
+
+    ;; fix video links
+    (goto-char (point-min))
+    (while (search-forward-regexp "\\[file:/content/.+\\](\\(/content/.+\\))" nil t)
+      (let ((p (match-string 1)))
+        (when (funcall video-check-fn p)
+          (replace-match (format "![](%s)" p)))))))
+
+(cl-defun porg-make-publish (&key copy-fn
+                                   image-dir-fn
+                                   sanitize-id-fn
+                                   (path-for-web-fn #'porg-file-name-for-web)
+                                   (video-check-fn #'porg-supported-video-p)
+                                   (video-path-prefix "/content")
+                                   (image-path-prefix "/images"))
+  "Create a publish function for org->markdown conversion.
+
+Returns a function suitable for a compiler's :build slot.
+
+Arguments:
+  COPY-FN - Function (temp-file item items) that copies content to temp-file.
+  IMAGE-DIR-FN - Function (item) returning the image directory for links.
+  SANITIZE-ID-FN - Function (items) returning an id link sanitizer function.
+  PATH-FOR-WEB-FN - Function (path) returning web-friendly path.
+                    Defaults to `porg-file-name-for-web'.
+  VIDEO-CHECK-FN - Function (path) returning t if path is a video.
+                   Defaults to `porg-supported-video-p'.
+  VIDEO-PATH-PREFIX - Prefix for video paths. Defaults to \"/content\".
+  IMAGE-PATH-PREFIX - Prefix for image paths. Defaults to \"/images\"."
+  (lambda (item items _cache)
+    (let* ((temp-file (make-temp-file "porg-publish" nil ".org"))
+           (image-dir (funcall image-dir-fn item)))
+      (porg-debug "writing to temp file")
+      (porg-debug "%s" temp-file)
+
+      ;; 1. copy file
+      (make-directory (file-name-directory (porg-item-target-abs item)) 'parents)
+      (funcall copy-fn temp-file item items)
+
+      ;; 2. remove private parts
+      (porg-clean-noexport-headings temp-file)
+
+      ;; 3. cleanup and transform links
+      (with-current-buffer (find-file-noselect temp-file)
+        (porg-clean-links-in-buffer
+         :sanitize-id-fn (funcall sanitize-id-fn items)
+         :sanitize-attachment-fn
+         (lambda (link)
+           (let* ((path (org-ml-get-property :path link))
+                  (path (funcall path-for-web-fn path)))
+             (->> link
+                  (org-ml-set-property :path (if (funcall video-check-fn path)
+                                                 (format "%s/%s/%s" video-path-prefix image-dir path)
+                                               (format "%s/%s/%s" image-path-prefix image-dir path)))
+                  (org-ml-set-property :type "file")
+                  (org-ml-set-children nil)))))
+        (save-buffer))
+
+      ;; 4. cleanup unsupported things
+      (with-current-buffer (find-file-noselect temp-file)
+        (porg-clean-org-for-pandoc)
+        (save-buffer))
+
+      ;; 5. convert to md
+      (shell-command-to-string
+       (format "pandoc --from=org --to=gfm+hard_line_breaks+tex_math_dollars --wrap=none '%s' > '%s'"
+               temp-file
+               (porg-item-target-abs item)))
+      (let ((auto-mode-alist '(("\\.md\\'" . text-mode))))
+        (with-current-buffer (find-file-noselect (porg-item-target-abs item))
+          (porg-clean-markdown-for-web video-check-fn)
+          (save-buffer))))))
+
+
 (provide 'publicatorg)
 ;;; publicatorg.el ends here

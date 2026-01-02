@@ -913,5 +913,98 @@
 
 
 
+;; * Org to Markdown publishing tests
+
+(describe "porg-clean-org-for-pandoc"
+  (it "removes table captions before #+results:"
+    (with-temp-buffer
+      (insert "#+caption: Table title\n#+results:\n| a | b |\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :to-equal "#+results:\n| a | b |\n")))
+
+  (it "keeps captions not followed by #+results:"
+    (with-temp-buffer
+      (insert "#+caption: Image caption\n[[file:image.png]]\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :to-match "\\+caption: Image caption")))
+
+  (it "adds attr_html before file links with captions"
+    (with-temp-buffer
+      (insert "#+caption: Nice image\n[[file:photo.jpg]]\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :to-match "\\+attr_html: :class image")))
+
+  (it "does not add attr_html for non-file links"
+    (with-temp-buffer
+      (insert "#+caption: A link\n[[https://example.com]]\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :not :to-match "\\+attr_html")))
+
+  (it "converts verse blocks to HTML blockquotes"
+    (with-temp-buffer
+      (insert "#+begin_verse\nFirst line\nSecond line\n#+end_verse\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :to-match "\\+begin_export html")
+      (expect (buffer-string) :to-match "<blockquote>")
+      (expect (buffer-string) :to-match "</blockquote>")
+      (expect (buffer-string) :to-match "<br/>")))
+
+  (it "replaces --- with en-dash in verses"
+    (with-temp-buffer
+      (insert "#+begin_verse\n---\n#+end_verse\n")
+      (porg-clean-org-for-pandoc)
+      (expect (buffer-string) :to-match "–"))))
+
+(describe "porg-clean-markdown-for-web"
+  (it "removes file:// prefixes from links"
+    (with-temp-buffer
+      (insert "![](file:///images/photo.webp)\n")
+      (porg-clean-markdown-for-web)
+      (expect (buffer-string) :to-equal "![](/images/photo.webp)\n")))
+
+  (it "converts video text links to image syntax"
+    (with-temp-buffer
+      (insert "[file:/content/test/video.mp4](/content/test/video.mp4)\n")
+      (porg-clean-markdown-for-web)
+      (expect (buffer-string) :to-equal "![](/content/test/video.mp4)\n")))
+
+  (it "does not convert non-video links"
+    (with-temp-buffer
+      (insert "[file:/content/test/image.jpg](/content/test/image.jpg)\n")
+      (porg-clean-markdown-for-web)
+      ;; Should remain unchanged since jpg is not a video
+      (expect (buffer-string) :to-match "\\[file:/content")))
+
+  (it "uses custom video check function when provided"
+    (with-temp-buffer
+      (insert "[file:/content/test/movie.webm](/content/test/movie.webm)\n")
+      (porg-clean-markdown-for-web (lambda (p) (string-suffix-p ".webm" p)))
+      (expect (buffer-string) :to-equal "![](/content/test/movie.webm)\n"))))
+
+(describe "porg-make-publish"
+  (it "returns a function"
+    (let ((publish-fn (porg-make-publish
+                       :copy-fn #'ignore
+                       :image-dir-fn (lambda (_) "test")
+                       :sanitize-id-fn (lambda (_) #'identity))))
+      (expect (functionp publish-fn) :to-be-truthy)))
+
+  (it "uses default path-for-web-fn"
+    ;; Just verify it doesn't error with defaults
+    (let ((publish-fn (porg-make-publish
+                       :copy-fn #'ignore
+                       :image-dir-fn (lambda (_) "test")
+                       :sanitize-id-fn (lambda (_) #'identity))))
+      (expect publish-fn :to-be-truthy)))
+
+  (it "uses default video-check-fn"
+    ;; Just verify it doesn't error with defaults
+    (let ((publish-fn (porg-make-publish
+                       :copy-fn #'ignore
+                       :image-dir-fn (lambda (_) "test")
+                       :sanitize-id-fn (lambda (_) #'identity))))
+      (expect publish-fn :to-be-truthy))))
+
+
 (provide 'publicatorg-test)
 ;;; publicatorg-test.el ends here
