@@ -928,35 +928,36 @@ Returns the process object."
         (porg-timing-measure 'phase "build"
           (condition-case err
               (let* ((build-ids (plist-get plan :build))
-                     ;; Separate sync and async items
-                     (sync-items nil)
-                     (async-items nil)
-                     (async-enabled (and porg-async-max-jobs (not porg-dry-run))))
-                  ;; Categorize items
-                  (dolist (id build-ids)
-                    (let* ((item (gethash id items))
-                           (compiler (porg-item-compiler item)))
-                      (if (and async-enabled (porg-compiler-async-build compiler))
-                          (push item async-items)
-                        (push item sync-items))))
-                  (setq sync-items (nreverse sync-items))
-                  (setq async-items (nreverse async-items))
+                     (async-enabled (and porg-async-max-jobs (not porg-dry-run)))
+                     ;; Build dependency graph and split into levels
+                     (build-graph (--map (cons it (porg-item-hard-deps (gethash it items)))
+                                         build-ids))
+                     (levels (porg-topological-levels build-graph))
+                     (total-built 0)
+                     (all-errors nil))
+                ;; Process each level - items in same level have no dependencies on each other
+                (dolist (level-ids levels)
+                  (let ((level-sync nil)
+                        (level-async nil))
+                    ;; Categorize items in this level
+                    (dolist (id level-ids)
+                      (let* ((item (gethash id items))
+                             (compiler (porg-item-compiler item)))
+                        (if (and async-enabled (porg-compiler-async-build compiler))
+                            (push item level-async)
+                          (push item level-sync))))
+                    (setq level-sync (nreverse level-sync))
+                    (setq level-async (nreverse level-async))
 
-                  ;; Log what we're doing
-                  (when (and async-items (not porg-dry-run))
-                    (porg-log "Building %d items async (%d jobs max), %d items sync"
-                              (length async-items) porg-async-max-jobs (length sync-items)))
-
-                  ;; Build sync items first
-                  (let ((sync-index 0))
-                    (dolist (item sync-items)
+                    ;; Build sync items in this level
+                    (dolist (item level-sync)
                       (let* ((rule (porg-item-rule item))
                              (compiler (porg-item-compiler item))
                              (compiler-name (porg-compiler-name compiler)))
-                        (cl-incf sync-index)
+                        (cl-incf total-built)
                         (porg-log
                          "[%s/%s]%s (%s:%s) building %s"
-                         (porg-string-from-number sync-index :padding-num build-size)
+                         (porg-string-from-number total-built :padding-num build-size)
                          build-size
                          (if porg-dry-run " [dry-run]" "")
                          (porg-rule-name rule)
@@ -975,34 +976,42 @@ Returns the process object."
                                            :rule (porg-rule-name rule)
                                            :rule-hash (porg-sha1sum rule)
                                            :compiler compiler-name
-                                           :compiler-hash (porg-sha1sum compiler)))))))
+                                           :compiler-hash (porg-sha1sum compiler))))))
 
-                  ;; Build async items in parallel
-                  (when (and async-items (not porg-dry-run))
-                    ;; Log async items
-                    (let ((async-index (length sync-items)))
-                      (dolist (item async-items)
-                        (cl-incf async-index)
+                    ;; Build async items in this level (in parallel)
+                    (when level-async
+                      ;; Log async items
+                      (dolist (item level-async)
+                        (cl-incf total-built)
                         (porg-log
                          "[%s/%s] (%s:%s) [async] %s"
-                         (porg-string-from-number async-index :padding-num build-size)
+                         (porg-string-from-number total-built :padding-num build-size)
                          build-size
                          (porg-rule-name (porg-item-rule item))
                          (porg-compiler-name (porg-item-compiler item))
-                         (funcall describe item))))
-                    ;; Run async batch
-                    (let ((errors (porg--async-build-batch
-                                   async-items items cache describe project-hash)))
-                      (when errors
-                        (porg-log "Async build completed with %d errors:" (length errors))
-                        (dolist (err errors)
-                          (porg-log-full "  %s: %s" (car err) (cdr err))))))
+                         (funcall describe item)))
+                      ;; Run async batch and wait for completion
+                      (unless porg-dry-run
+                        (let ((errors (porg--async-build-batch
+                                       level-async items cache describe project-hash)))
+                          (when errors
+                            (setq all-errors (append errors all-errors))))))
 
-                  ;; Sync cache
-                  (when (and (not porg-dry-run)
-                             (porg-cache-needs-sync-p cache)
-                             build-ids)
-                    (porg-cache-write cache-file cache)))
+                    ;; Write cache after each level (for file backend)
+                    (when (porg-cache-needs-sync-p cache)
+                      (porg-cache-write cache-file cache))))
+
+                ;; Report any errors from async builds
+                (when all-errors
+                  (porg-log "Async build completed with %d errors:" (length all-errors))
+                  (dolist (err all-errors)
+                    (porg-log-full "  %s: %s" (car err) (cdr err))))
+
+                ;; Final cache sync
+                (when (and (not porg-dry-run)
+                           (porg-cache-needs-sync-p cache)
+                           build-ids)
+                  (porg-cache-write cache-file cache)))
             (error
              ;; on any error, still write out what we have so far
              (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
