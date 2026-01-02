@@ -1429,12 +1429,15 @@ hash-table test, defaulting to `equal`."
 (defvar porg-convertible-image-extensions '("jpeg" "png" "jpg" "heic" "webp")
   "List of image extensions that can be converted to webp.")
 
+(defvar porg-supported-media-extensions
+  (append porg-supported-image-extensions porg-supported-video-extensions)
+  "Combined list of all supported media extensions (images + videos).
+Cached for performance - avoids creating new list on each call.")
+
 (defun porg-supported-media-p (file)
   "Return non-nil if FILE is a supported media (image or video)."
-  (when-let ((ext (file-name-extension file)))
-    (seq-contains-p (append porg-supported-image-extensions
-                            porg-supported-video-extensions)
-                    (downcase ext))))
+  (when-let* ((ext (file-name-extension file)))
+    (seq-contains-p porg-supported-media-extensions (downcase ext))))
 
 (defun porg-supported-video-p (file)
   "Return non-nil if FILE is a supported video."
