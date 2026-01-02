@@ -843,19 +843,24 @@ CALLBACK is called with (success error-msg).
 NAME is an optional process name.
 Returns the process object."
   (let* ((buf (generate-new-buffer (format " *porg-async-%s*" (or name "cmd"))))
+         ;; Wrap command to capture stderr
+         (wrapped-cmd (format "{ %s ; } 2>&1" command))
          (proc (start-process-shell-command
                 (or name "porg-async")
                 buf
-                command)))
+                wrapped-cmd)))
     (set-process-sentinel
      proc
      (lambda (process _event)
        (when (memq (process-status process) '(exit signal))
-         (let ((success (= (process-exit-status process) 0))
+         (let ((exit-code (process-exit-status process))
+               (success (= (process-exit-status process) 0))
                (error-msg nil))
            (unless success
              (with-current-buffer (process-buffer process)
-               (setq error-msg (buffer-string))))
+               (setq error-msg (string-trim (buffer-string))))
+             (when (or (null error-msg) (string-empty-p error-msg))
+               (setq error-msg (format "exit code %d" exit-code))))
            (kill-buffer (process-buffer process))
            (funcall callback success error-msg)))))
     proc))
@@ -1037,7 +1042,7 @@ Returns the process object."
                       (when errors
                         (porg-log "Async build completed with %d errors:" (length errors))
                         (dolist (err errors)
-                          (porg-log "  %s: %s" (car err) (cdr err))))))
+                          (porg-log-full "  %s: %s" (car err) (cdr err))))))
 
                   ;; Sync cache
                   (when (and (not porg-dry-run)
@@ -1470,6 +1475,10 @@ The output width is limited to 80 characters."
 
 The output width is limited to 80 characters."
   (message (s-truncate 80 (apply #'format format-string args))))
+
+(defun porg-log-full (format-string &rest args)
+  "Log FORMAT-STRING with ARGS without truncation."
+  (message (apply #'format format-string args)))
 
 (defun porg-debug (format-string &rest args)
   "Debug log FORMAT-STRING with ARGS.
