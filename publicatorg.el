@@ -197,9 +197,18 @@ dependencies declare what notes are required to build this rule."
 (cl-defun porg-note-output (note &key file soft-deps hard-deps)
   "Make an output for NOTE.
 
-See `porg-rule-output' for explanation of FILE, SOFT-DEPS, and HARD-DEPS.
+Creates a `porg-rule-output' with:
+- ID from the note's vulpea ID
+- TYPE set to \"note\"
+- ITEM set to NOTE itself
 
-In addition, SOFT-DEPS are concatenated with list all linked notes."
+FILE is the relative output path.
+SOFT-DEPS is a list of IDs that trigger rebuild when changed.
+HARD-DEPS is a list of IDs that must be built before this note.
+
+Note: Linked notes are NOT automatically added as soft-deps.
+Callers should use `vulpea-note-links' if they want to depend on
+linked notes."
   (porg-rule-output
    :id (vulpea-note-id note)
    :type "note"
