@@ -1455,17 +1455,17 @@ Cached for performance - avoids creating new list on each call.")
 
 (defun porg-supported-video-p (file)
   "Return non-nil if FILE is a supported video."
-  (when-let ((ext (file-name-extension file)))
+  (when-let* ((ext (file-name-extension file)))
     (seq-contains-p porg-supported-video-extensions (downcase ext))))
 
 (defun porg-supported-image-p (file)
   "Return non-nil if FILE is a supported image."
-  (when-let ((ext (file-name-extension file)))
+  (when-let* ((ext (file-name-extension file)))
     (seq-contains-p porg-supported-image-extensions (downcase ext))))
 
 (defun porg-convertible-image-p (file)
   "Return non-nil if FILE is an image that can be converted to webp."
-  (when-let ((ext (file-name-extension file)))
+  (when-let* ((ext (file-name-extension file)))
     (seq-contains-p porg-convertible-image-extensions (downcase ext))))
 
 
