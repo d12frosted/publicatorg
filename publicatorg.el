@@ -461,7 +461,7 @@ Can be one of:
 
 ;; File backend implementation
 (cl-defmethod porg-cache-open ((_backend (eql file)) file)
-  "Open file-based cache."
+  "Open file-based cache from FILE."
   (let ((data (if (file-exists-p file)
                   (condition-case nil
                       (with-temp-buffer
@@ -475,7 +475,7 @@ Can be one of:
 
 ;; SQLite backend implementation
 (cl-defmethod porg-cache-open ((_backend (eql sqlite)) file)
-  "Open SQLite-based cache."
+  "Open SQLite-based cache from FILE."
   (let* ((db-file (concat file ".db"))
          (db (emacsql-sqlite-open db-file)))
     ;; Create table if not exists
@@ -853,7 +853,7 @@ CACHE-MUTEX is the mutex for cache updates (nil for sequential builds)."
        (cons (porg-item-id item) err))))) ; return error info
 
 (defun porg--build-level-parallel (level items cache describe project-hash max-workers)
-  "Build items in LEVEL in parallel with at most MAX-WORKERS threads.
+  "Build ITEMS in LEVEL in parallel with at most MAX-WORKERS threads.
 Returns list of errors (each is (id . error))."
   (let* ((mutex (make-mutex "porg-build"))
          (threads nil)
