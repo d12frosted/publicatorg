@@ -3,3 +3,4 @@
 /Eldev-local
 *-autoloads.el
 *.elc
+test/playground/output/
