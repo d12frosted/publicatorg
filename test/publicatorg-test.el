@@ -270,7 +270,15 @@
 
   (it "sanitizes file names while converting"
     (expect (porg-file-name-for-web "My Photo (1).jpg")
-            :to-equal "My-Photo-1.webp")))
+            :to-equal "My-Photo-1.webp"))
+
+  (it "sanitizes non-convertible files too"
+    (expect (porg-file-name-for-web "My Animation (1).gif")
+            :to-equal "My-Animation-1.gif")
+    (expect (porg-file-name-for-web "icon file.svg")
+            :to-equal "icon-file.svg")
+    (expect (porg-file-name-for-web "my video (final).mp4")
+            :to-equal "my-video-final.mp4")))
 
 (describe "porg-file-name-replace-ext"
   (it "replaces extension"

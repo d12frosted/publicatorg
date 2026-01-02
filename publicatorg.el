@@ -1473,11 +1473,14 @@ from the basename."
 
 (defun porg-file-name-for-web (file-name)
   "Convert FILE-NAME to web-friendly format.
-For convertible images, changes extension to webp.
-For other files, returns unchanged."
-  (if (porg-convertible-image-p file-name)
-      (porg-file-name-sanitize file-name "webp")
-    file-name))
+For convertible images, changes extension to webp and sanitizes.
+For other supported media, sanitizes but keeps original extension."
+  (cond
+   ((porg-convertible-image-p file-name)
+    (porg-file-name-sanitize file-name "webp"))
+   ((porg-supported-media-p file-name)
+    (porg-file-name-sanitize file-name (file-name-extension file-name)))
+   (t file-name)))
 
 (defun porg-file-name-replace-ext (file-name new-ext)
   "Replace FILE-NAME extension with NEW-EXT."
