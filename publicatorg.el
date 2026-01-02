@@ -55,6 +55,114 @@ When a positive integer, specifies the maximum number of parallel workers.
 Items that don't depend on each other can be built in parallel.
 Note: Requires Emacs 26+ for thread support.")
 
+(defvar porg-timing-enabled nil
+  "When non-nil, collect timing information during builds.
+Use `porg-timing-report' to display results after a build.")
+
+(defvar porg-timing-results nil
+  "Accumulated timing results from the last build.
+Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
+
+(defun porg-timing-reset ()
+  "Reset timing results for a new build."
+  (setq porg-timing-results
+        (list :phases nil
+              :compilers (make-hash-table :test 'equal)
+              :cache nil)))
+
+(defun porg-timing-record-phase (name elapsed)
+  "Record timing for build phase NAME with ELAPSED seconds."
+  (when porg-timing-enabled
+    (push (cons name elapsed) (plist-get porg-timing-results :phases))))
+
+(defun porg-timing-record-compiler (name elapsed)
+  "Record timing for compiler NAME with ELAPSED seconds."
+  (when porg-timing-enabled
+    (let* ((tbl (plist-get porg-timing-results :compilers))
+           (existing (gethash name tbl)))
+      (puthash name
+               (list :count (1+ (or (plist-get existing :count) 0))
+                     :total (+ elapsed (or (plist-get existing :total) 0.0))
+                     :min (min elapsed (or (plist-get existing :min) elapsed))
+                     :max (max elapsed (or (plist-get existing :max) elapsed)))
+               tbl))))
+
+(defun porg-timing-record-cache (operation elapsed)
+  "Record timing for cache OPERATION with ELAPSED seconds."
+  (when porg-timing-enabled
+    (let* ((cache-timings (plist-get porg-timing-results :cache))
+           (existing (assoc operation cache-timings)))
+      (if existing
+          (setcdr existing
+                  (list :count (1+ (plist-get (cdr existing) :count))
+                        :total (+ elapsed (plist-get (cdr existing) :total))))
+        (push (cons operation (list :count 1 :total elapsed))
+              (plist-get porg-timing-results :cache))
+        (setq porg-timing-results
+              (plist-put porg-timing-results :cache
+                         (cons (cons operation (list :count 1 :total elapsed))
+                               cache-timings)))))))
+
+(defmacro porg-timing-measure (category name &rest body)
+  "Measure execution time of BODY for CATEGORY/NAME.
+CATEGORY is one of: phase, compiler, cache."
+  (declare (indent 2))
+  `(if porg-timing-enabled
+       (let ((start-time (float-time)))
+         (prog1 (progn ,@body)
+           (let ((elapsed (- (float-time) start-time)))
+             (pcase ,category
+               ('phase (porg-timing-record-phase ,name elapsed))
+               ('compiler (porg-timing-record-compiler ,name elapsed))
+               ('cache (porg-timing-record-cache ,name elapsed))))))
+     ,@body))
+
+(defun porg-timing-report ()
+  "Display timing report from the last build."
+  (unless porg-timing-results
+    (user-error "No timing data available. Run a build with porg-timing-enabled set to t"))
+  (let ((phases (reverse (plist-get porg-timing-results :phases)))
+        (compilers (plist-get porg-timing-results :compilers))
+        (cache (plist-get porg-timing-results :cache)))
+    (porg-log-s "Timing Report")
+
+    ;; Phase timings
+    (porg-log "Build Phases:")
+    (let ((total 0.0))
+      (dolist (phase phases)
+        (porg-log "  %-20s %8.3fs" (car phase) (cdr phase))
+        (setq total (+ total (cdr phase))))
+      (porg-log "  %-20s %8.3fs" "TOTAL" total))
+
+    ;; Compiler timings
+    (when (> (hash-table-count compilers) 0)
+      (porg-log "")
+      (porg-log "Compiler Timings:")
+      (porg-log "  %-20s %6s %10s %10s %10s %10s"
+                "Name" "Count" "Total" "Avg" "Min" "Max")
+      (maphash
+       (lambda (name stats)
+         (let ((count (plist-get stats :count))
+               (total (plist-get stats :total)))
+           (porg-log "  %-20s %6d %9.3fs %9.3fs %9.3fs %9.3fs"
+                     name count total
+                     (/ total count)
+                     (plist-get stats :min)
+                     (plist-get stats :max))))
+       compilers))
+
+    ;; Cache timings
+    (when cache
+      (porg-log "")
+      (porg-log "Cache Operations:")
+      (dolist (op cache)
+        (porg-log "  %-20s %6d ops %8.3fs total %8.6fs avg"
+                  (car op)
+                  (plist-get (cdr op) :count)
+                  (plist-get (cdr op) :total)
+                  (/ (plist-get (cdr op) :total)
+                     (plist-get (cdr op) :count)))))))
+
 (cl-defgeneric porg-describe (thing)
   "Describe THING.")
 
@@ -493,40 +601,42 @@ Can be one of:
 ;; Unified cache operations (dispatch based on backend)
 (cl-defmethod porg-cache-get ((cache porg-cache) id)
   "Get value for ID from CACHE."
-  (pcase (porg-cache-backend cache)
-    ('file (gethash id (porg-cache-data cache)))
-    ('sqlite
-     (let ((row (car (emacsql (porg-cache-data cache)
-                              [:select [hash output project_hash rule rule_hash compiler compiler_hash]
-                               :from cache
-                               :where (= id $s1)]
-                              id))))
-       (when row
-         (porg-cache-item-create
-          :hash (nth 0 row)
-          :output (nth 1 row)
-          :project-hash (nth 2 row)
-          :rule (nth 3 row)
-          :rule-hash (nth 4 row)
-          :compiler (nth 5 row)
-          :compiler-hash (nth 6 row)))))))
+  (porg-timing-measure 'cache "get"
+    (pcase (porg-cache-backend cache)
+      ('file (gethash id (porg-cache-data cache)))
+      ('sqlite
+       (let ((row (car (emacsql (porg-cache-data cache)
+                                [:select [hash output project_hash rule rule_hash compiler compiler_hash]
+                                 :from cache
+                                 :where (= id $s1)]
+                                id))))
+         (when row
+           (porg-cache-item-create
+            :hash (nth 0 row)
+            :output (nth 1 row)
+            :project-hash (nth 2 row)
+            :rule (nth 3 row)
+            :rule-hash (nth 4 row)
+            :compiler (nth 5 row)
+            :compiler-hash (nth 6 row))))))))
 
 (cl-defmethod porg-cache-put ((cache porg-cache) id value)
   "Put VALUE for ID into CACHE."
-  (pcase (porg-cache-backend cache)
-    ('file (puthash id value (porg-cache-data cache)))
-    ('sqlite
-     (emacsql (porg-cache-data cache)
-              [:insert-or-replace :into cache
-               :values $v1]
-              (vector id
-                      (porg-cache-item-hash value)
-                      (porg-cache-item-output value)
-                      (porg-cache-item-project-hash value)
-                      (porg-cache-item-rule value)
-                      (porg-cache-item-rule-hash value)
-                      (porg-cache-item-compiler value)
-                      (porg-cache-item-compiler-hash value))))))
+  (porg-timing-measure 'cache "put"
+    (pcase (porg-cache-backend cache)
+      ('file (puthash id value (porg-cache-data cache)))
+      ('sqlite
+       (emacsql (porg-cache-data cache)
+                [:insert-or-replace :into cache
+                 :values $v1]
+                (vector id
+                        (porg-cache-item-hash value)
+                        (porg-cache-item-output value)
+                        (porg-cache-item-project-hash value)
+                        (porg-cache-item-rule value)
+                        (porg-cache-item-rule-hash value)
+                        (porg-cache-item-compiler value)
+                        (porg-cache-item-compiler-hash value)))))))
 
 (cl-defmethod porg-cache-remove ((cache porg-cache) id)
   "Remove ID from CACHE."
@@ -539,11 +649,12 @@ Can be one of:
 
 (cl-defmethod porg-cache-keys ((cache porg-cache))
   "Return all keys in CACHE."
-  (pcase (porg-cache-backend cache)
-    ('file (hash-table-keys (porg-cache-data cache)))
-    ('sqlite
-     (mapcar #'car (emacsql (porg-cache-data cache)
-                            [:select id :from cache])))))
+  (porg-timing-measure 'cache "keys"
+    (pcase (porg-cache-backend cache)
+      ('file (hash-table-keys (porg-cache-data cache)))
+      ('sqlite
+       (mapcar #'car (emacsql (porg-cache-data cache)
+                              [:select id :from cache]))))))
 
 (cl-defmethod porg-cache-sync ((cache porg-cache))
   "Sync CACHE to persistent storage."
@@ -645,15 +756,20 @@ and the time taken by garbage collection. See also
   (let ((project (assoc-default name porg--projects)))
     (unless project
       (user-error "Could not find project named '%s'" name))
+    (when porg-timing-enabled
+      (porg-timing-reset))
     (porg-log-s "calculating build plan")
     (let ((default-directory (porg-project-root project)))
       (porg-log "loading cache")
       (let* ((cache-file (expand-file-name (porg-project-cache-file project)
                                            (porg-project-root project)))
-             (cache (porg-benchmark-run 1 #'porg-cache-load nil cache-file))
+             (cache (porg-timing-measure 'phase "cache-load"
+                      (porg-benchmark-run 1 #'porg-cache-load nil cache-file)))
              (describe (porg-project-describe project))
-             (items (porg-benchmark-run 1 #'porg-build-items nil project))
-             (plan (porg-benchmark-run 1 #'porg-build-plan nil project items cache))
+             (items (porg-timing-measure 'phase "build-items"
+                      (porg-benchmark-run 1 #'porg-build-items nil project)))
+             (plan (porg-timing-measure 'phase "build-plan"
+                     (porg-benchmark-run 1 #'porg-build-plan nil project items cache)))
              (build-size (seq-length (plist-get plan :build)))
              (delete-size (seq-length (plist-get plan :delete)))
              (batch-rules (-filter #'porg-batch-rule-p
@@ -663,38 +779,39 @@ and the time taken by garbage collection. See also
         (porg-log-s (if porg-dry-run "cleanup (dry-run)" "cleanup"))
         (unless (plist-get plan :delete)
           (porg-log "Nothing to delete, everything is used."))
-        (when porg-enable-cleanup
-          (condition-case err
-              (progn
-                (--each-indexed (plist-get plan :delete)
-                  (when-let* ((cached (porg-cache-get cache it))
-                              (compiler-name (porg-cache-item-compiler cached))
-                              (compiler (--find (string-equal compiler-name (porg-compiler-name it))
-                                                (porg-project-compilers project))))
-                    (porg-log
-                     "[%s/%s]%s cleaning %s using %s rule from %s"
-                     (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
-                     delete-size
-                     (if porg-dry-run " [dry-run]" "")
-                     it
-                     compiler-name
-                     (porg-cache-item-output cached))
-                    (unless porg-dry-run
-                      (when (porg-compiler-clean compiler)
-                        (funcall (porg-compiler-clean compiler)
-                                 (expand-file-name
-                                  (porg-cache-item-output cached)
-                                  (porg-project-root project))))
-                      (porg-cache-remove cache it))))
-                ;; update cache after we cleaned everything
-                (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
-                  (porg-cache-write cache-file cache)))
-            (error
-             ;; on any error, still write out what we have so far
-             (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
-               (message "Cleanup failed, saving partial cache...")
-               (porg-cache-write cache-file cache))
-             (signal (car err) (cdr err)))))
+        (porg-timing-measure 'phase "cleanup"
+          (when porg-enable-cleanup
+            (condition-case err
+                (progn
+                  (--each-indexed (plist-get plan :delete)
+                    (when-let* ((cached (porg-cache-get cache it))
+                                (compiler-name (porg-cache-item-compiler cached))
+                                (compiler (--find (string-equal compiler-name (porg-compiler-name it))
+                                                  (porg-project-compilers project))))
+                      (porg-log
+                       "[%s/%s]%s cleaning %s using %s rule from %s"
+                       (porg-string-from-number (+ 1 it-index) :padding-num delete-size)
+                       delete-size
+                       (if porg-dry-run " [dry-run]" "")
+                       it
+                       compiler-name
+                       (porg-cache-item-output cached))
+                      (unless porg-dry-run
+                        (when (porg-compiler-clean compiler)
+                          (funcall (porg-compiler-clean compiler)
+                                   (expand-file-name
+                                    (porg-cache-item-output cached)
+                                    (porg-project-root project))))
+                        (porg-cache-remove cache it))))
+                  ;; update cache after we cleaned everything
+                  (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
+                    (porg-cache-write cache-file cache)))
+              (error
+               ;; on any error, still write out what we have so far
+               (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
+                 (message "Cleanup failed, saving partial cache...")
+                 (porg-cache-write cache-file cache))
+               (signal (car err) (cdr err))))))
 
         (porg-log-s (cond
                      (porg-dry-run "build (dry-run)")
@@ -702,106 +819,110 @@ and the time taken by garbage collection. See also
                      (t "build")))
         (unless (plist-get plan :build)
           (porg-log "Nothing to build, everything is up to date."))
-        (condition-case err
-            (if (and porg-parallel (not porg-dry-run) (plist-get plan :build))
-                ;; Parallel build mode
-                (let* ((build-ids (plist-get plan :build))
-                       (build-graph (--map (cons it (porg-item-hard-deps (gethash it items)))
-                                           build-ids))
-                       (levels (porg-topological-levels build-graph))
-                       (total-built 0)
-                       (all-errors nil))
-                  (porg-log "Building in %d parallel levels" (length levels))
-                  (dolist (level-ids levels)
-                    (let* ((level-items (--map (gethash it items) level-ids)))
-                      ;; Log items in this level
-                      (dolist (item level-items)
-                        (cl-incf total-built)
-                        (porg-log
-                         "[%s/%s] (%s:%s) building %s"
-                         (porg-string-from-number total-built :padding-num build-size)
-                         build-size
-                         (porg-rule-name (porg-item-rule item))
-                         (porg-compiler-name (porg-item-compiler item))
-                         (funcall describe item)))
-                      ;; Build level in parallel
-                      (let ((errors (porg--build-level-parallel
-                                     level-items items cache describe
-                                     project-hash porg-parallel)))
-                        (when errors
-                          (setq all-errors (append errors all-errors))))
-                      ;; Write cache after each level (file backend only)
-                      (when (porg-cache-needs-sync-p cache)
-                        (porg-cache-write cache-file cache))))
-                  ;; Report any errors
-                  (when all-errors
-                    (porg-log "Build completed with %d errors:" (length all-errors))
-                    (dolist (err all-errors)
-                      (porg-log "  %s: %s" (car err) (cdr err)))))
-              ;; Sequential build mode (original behavior)
-              (progn
-                (--each-indexed (plist-get plan :build)
-                  (let* ((item (gethash it items))
-                         (rule (porg-item-rule item))
-                         (compiler (porg-item-compiler item)))
-                    (porg-log
-                     "[%s/%s]%s (%s:%s) building %s"
-                     (porg-string-from-number (+ 1 it-index) :padding-num build-size)
-                     build-size
-                     (if porg-dry-run " [dry-run]" "")
-                     (porg-rule-name rule)
-                     (porg-compiler-name compiler)
-                     (funcall describe item))
-                    (unless porg-dry-run
-                      (when-let* ((build (porg-compiler-build compiler)))
-                        (funcall build item items cache))
-                      (porg-cache-put cache
-                                      (porg-item-id item)
-                                      (porg-cache-item-create
-                                       :hash (porg-item-hash item)
-                                       :output (porg-item-target-rel item)
-                                       :project-hash project-hash
-                                       :rule (porg-rule-name rule)
-                                       :rule-hash (porg-sha1sum rule)
-                                       :compiler (porg-compiler-name compiler)
-                                       :compiler-hash (porg-sha1sum compiler)))
-                      (when (and (porg-cache-needs-sync-p cache)
-                                 (> it-index 0)
-                                 (= (% it-index 100) 0))
-                        (porg-cache-write cache-file cache)))))
-                (when (and (not porg-dry-run)
-                           (porg-cache-needs-sync-p cache)
-                           (plist-get plan :build))
-                  (porg-cache-write cache-file cache))))
-          (error
-           ;; on any error, still write out what we have so far
-           (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
-             (message "Build failed, saving partial cache...")
-             (porg-cache-write cache-file cache))
-           (signal (car err) (cdr err))))
+        (porg-timing-measure 'phase "build"
+          (condition-case err
+              (if (and porg-parallel (not porg-dry-run) (plist-get plan :build))
+                  ;; Parallel build mode
+                  (let* ((build-ids (plist-get plan :build))
+                         (build-graph (--map (cons it (porg-item-hard-deps (gethash it items)))
+                                             build-ids))
+                         (levels (porg-topological-levels build-graph))
+                         (total-built 0)
+                         (all-errors nil))
+                    (porg-log "Building in %d parallel levels" (length levels))
+                    (dolist (level-ids levels)
+                      (let* ((level-items (--map (gethash it items) level-ids)))
+                        ;; Log items in this level
+                        (dolist (item level-items)
+                          (cl-incf total-built)
+                          (porg-log
+                           "[%s/%s] (%s:%s) building %s"
+                           (porg-string-from-number total-built :padding-num build-size)
+                           build-size
+                           (porg-rule-name (porg-item-rule item))
+                           (porg-compiler-name (porg-item-compiler item))
+                           (funcall describe item)))
+                        ;; Build level in parallel
+                        (let ((errors (porg--build-level-parallel
+                                       level-items items cache describe
+                                       project-hash porg-parallel)))
+                          (when errors
+                            (setq all-errors (append errors all-errors))))
+                        ;; Write cache after each level (file backend only)
+                        (when (porg-cache-needs-sync-p cache)
+                          (porg-cache-write cache-file cache))))
+                    ;; Report any errors
+                    (when all-errors
+                      (porg-log "Build completed with %d errors:" (length all-errors))
+                      (dolist (err all-errors)
+                        (porg-log "  %s: %s" (car err) (cdr err)))))
+                ;; Sequential build mode (original behavior)
+                (progn
+                  (--each-indexed (plist-get plan :build)
+                    (let* ((item (gethash it items))
+                           (rule (porg-item-rule item))
+                           (compiler (porg-item-compiler item))
+                           (compiler-name (porg-compiler-name compiler)))
+                      (porg-log
+                       "[%s/%s]%s (%s:%s) building %s"
+                       (porg-string-from-number (+ 1 it-index) :padding-num build-size)
+                       build-size
+                       (if porg-dry-run " [dry-run]" "")
+                       (porg-rule-name rule)
+                       compiler-name
+                       (funcall describe item))
+                      (unless porg-dry-run
+                        (when-let* ((build (porg-compiler-build compiler)))
+                          (porg-timing-measure 'compiler compiler-name
+                            (funcall build item items cache)))
+                        (porg-cache-put cache
+                                        (porg-item-id item)
+                                        (porg-cache-item-create
+                                         :hash (porg-item-hash item)
+                                         :output (porg-item-target-rel item)
+                                         :project-hash project-hash
+                                         :rule (porg-rule-name rule)
+                                         :rule-hash (porg-sha1sum rule)
+                                         :compiler compiler-name
+                                         :compiler-hash (porg-sha1sum compiler)))
+                        (when (and (porg-cache-needs-sync-p cache)
+                                   (> it-index 0)
+                                   (= (% it-index 100) 0))
+                          (porg-cache-write cache-file cache)))))
+                  (when (and (not porg-dry-run)
+                             (porg-cache-needs-sync-p cache)
+                             (plist-get plan :build))
+                    (porg-cache-write cache-file cache))))
+            (error
+             ;; on any error, still write out what we have so far
+             (when (and (not porg-dry-run) (porg-cache-needs-sync-p cache))
+               (message "Build failed, saving partial cache...")
+               (porg-cache-write cache-file cache))
+             (signal (car err) (cdr err)))))
 
         (porg-log-s (if porg-dry-run "run batch actions (dry-run)" "run batch actions"))
         (unless batch-rules
           (porg-log "No batch actions to run"))
-        (--each-indexed batch-rules
-          (let* ((filter (porg-batch-rule-filter it))
-                 (items-selected (hash-table-values items))
-                 (items-selected (if filter (funcall #'-filter filter items-selected) items-selected))
-                 (size (seq-length items-selected))
-                 (items-selected (let ((tbl (make-hash-table :test 'equal :size size)))
-                                   (--each items-selected (puthash (porg-item-id it) it tbl))
-                                   tbl))
-                 (target (porg-batch-rule-target it))
-                 (target (if (functionp target) (funcall target items) target)))
-            (porg-log
-             "[%s/%s]%s running %s batch action on the set of %s notes"
-             (porg-string-from-number (+ 1 it-index) :padding-num (seq-length batch-rules))
-             (seq-length batch-rules)
-             (if porg-dry-run " [dry-run]" "")
-             (porg-batch-rule-name it)
-             size)
-            (unless porg-dry-run
-              (funcall (porg-batch-rule-publish it) target items-selected items cache))))
+        (porg-timing-measure 'phase "batch-actions"
+          (--each-indexed batch-rules
+            (let* ((filter (porg-batch-rule-filter it))
+                   (items-selected (hash-table-values items))
+                   (items-selected (if filter (funcall #'-filter filter items-selected) items-selected))
+                   (size (seq-length items-selected))
+                   (items-selected (let ((tbl (make-hash-table :test 'equal :size size)))
+                                     (--each items-selected (puthash (porg-item-id it) it tbl))
+                                     tbl))
+                   (target (porg-batch-rule-target it))
+                   (target (if (functionp target) (funcall target items) target)))
+              (porg-log
+               "[%s/%s]%s running %s batch action on the set of %s notes"
+               (porg-string-from-number (+ 1 it-index) :padding-num (seq-length batch-rules))
+               (seq-length batch-rules)
+               (if porg-dry-run " [dry-run]" "")
+               (porg-batch-rule-name it)
+               size)
+              (unless porg-dry-run
+                (funcall (porg-batch-rule-publish it) target items-selected items cache)))))
 
         (unless porg-dry-run
           (porg-cache-write cache-file cache))
@@ -809,7 +930,9 @@ and the time taken by garbage collection. See also
         (if porg-dry-run
             (porg-log "Dry run complete! No changes were made.")
           (porg-log "The work is done! Enjoy your published vulpea notes!")
-          (porg-log "        ٩(^ᴗ^)۶"))))))
+          (porg-log "        ٩(^ᴗ^)۶"))
+        (when porg-timing-enabled
+          (porg-timing-report))))))
 
 ;;;###autoload
 (defun porg-run-dry (name)
@@ -817,6 +940,13 @@ and the time taken by garbage collection. See also
 Shows what would be built/cleaned without actually executing anything.
 This is equivalent to (let ((porg-dry-run t)) (porg-run NAME))."
   (let ((porg-dry-run t))
+    (porg-run name)))
+
+;;;###autoload
+(defun porg-run-timed (name)
+  "Export project with NAME and display timing report.
+This is equivalent to (let ((porg-timing-enabled t)) (porg-run NAME))."
+  (let ((porg-timing-enabled t))
     (porg-run name)))
 
 (defvar porg--build-mutex nil

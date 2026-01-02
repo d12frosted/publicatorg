@@ -1,0 +1,39 @@
+#+title: Publicatorg Performance & Async Tasks
+
+* Plan
+** TODO Step 1: Migrate d12frosted.io to latest publicatorg
+- [ ] Replace local helpers with porg-* equivalents
+- [ ] Switch to SQLite cache backend
+- [ ] Add .db to git-lfs
+- [ ] Run build, verify only cache files changed
+- [ ] Ask user to verify
+
+** TODO Step 2: Add timing instrumentation
+- [ ] Add timing to compiler execution
+- [ ] Measure file vs SQLite cache
+- [ ] Record baseline in ~/publicatorg-perf.org
+
+** TODO Step 3: Prototype async compiler support
+- [ ] Design async compiler API (:async slot)
+- [ ] Implement process management in build loop
+- [ ] Test with convert (slow tool shows better gains)
+- [ ] Ask user to verify
+
+** TODO Step 4: Extend async support
+- [ ] Apply to other heavy operations (pandoc, etc.)
+- [ ] Measure improvements
+- [ ] Ask user to verify
+
+** TODO Step 5: Clean up old parallel code (optional)
+- [ ] Remove thread-based parallel implementation if async replaces it
+- [ ] Or keep both if they serve different purposes
+
+** TODO Step 6: Move to faster tools
+- [ ] cwebp instead of convert for webp
+- [ ] vips/vipsheader for image operations
+- [ ] Ensure metadata stripping still works
+- [ ] Measure final improvements
+
+* Notes
+- Performance results tracked in ~/publicatorg-perf.org
+- Each change requires: benchmark before, make change, benchmark after, record
