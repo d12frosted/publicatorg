@@ -1863,6 +1863,22 @@ fi"
        nil))
    :clean #'porg-delete-with-metadata))
 
+(cl-defun porg-videos-compiler (&key (hash #'porg-images-hash-default))
+  "Create a videos compiler that copies video files.
+
+HASH is the hash function (default `porg-images-hash-default')."
+  (porg-compiler
+   :name "videos"
+   :match (-rpartial #'porg-rule-output-that
+                     :type "attachment"
+                     :predicate #'porg-supported-video-p)
+   :hash hash
+   :build
+   (lambda (item _items _cache)
+     (make-directory (file-name-directory (porg-item-target-abs item)) 'parents)
+     (copy-file (porg-item-item item) (porg-item-target-abs item) t))
+   :clean #'porg-delete-with-metadata))
+
 
 (provide 'publicatorg)
 ;;; publicatorg.el ends here
