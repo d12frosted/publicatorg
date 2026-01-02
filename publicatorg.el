@@ -1386,6 +1386,27 @@ All other links are transformed to plain text."
                     (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
            it))))
 
+(defun porg-sha1sum-attachment (obj)
+  "Calculate sha1sum of attachment OBJ from vulpea database.
+
+This queries the attachments table in the vulpea database to get
+the hash for the given attachment. The attachments table should have
+columns: note-id, file, hash.
+
+OBJ should be a `porg-rule-output' with type \"attachment\"."
+  (cond
+   ((porg-rule-output-p obj)
+    (let ((id (s-split ":" (porg-rule-output-id obj)))
+          (file (file-name-nondirectory (porg-rule-output-item obj))))
+      (emacsql
+       (vulpea-db)
+       [:select hash
+        :from attachments
+        :where (and (= note-id $s1)
+                    (= file $s2))]
+       id file)))
+   (t (user-error "Unknown type of attachment: %s" obj))))
+
 (cl-defun porg-sanitize-id-link (link items &key (content-prefix ""))
   "Sanitize ID LINK according to ITEMS.
 
