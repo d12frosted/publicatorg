@@ -439,8 +439,10 @@ This is a convenience wrapper around `porg-note-output' and
 Arguments:
 FILE is a function (note -> string) returning relative output path.
 
-ATTACH-DIR is a function (note -> string) returning relative
-directory for attachments. When nil, attachments are skipped.
+ATTACH-DIR is a function (note attachment -> string) returning relative
+directory for attachments. When nil, attachments are skipped. The
+attachment parameter is the attachment file name, allowing different
+directories for different attachment types (e.g., videos vs images).
 
 ATTACH-FILTER is a predicate on attachment file name. Controls
 which attachments are included. Defaults to `porg-supported-media-p'.
@@ -471,8 +473,8 @@ Dependency behavior:
             (when attach-dir
               (porg-attachments-output
                note
-               :dir (lambda (_attachment)
-                      (funcall attach-dir note))
+               :dir (lambda (attachment)
+                      (funcall attach-dir note attachment))
                :file-mod (or attach-file-mod (list #'porg-file-name-for-web))
                :filter (or attach-filter #'porg-supported-media-p))))
            (extra-outputs (when outputs-extra
