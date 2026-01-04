@@ -981,6 +981,83 @@
       (porg-clean-markdown-for-web (lambda (p) (string-suffix-p ".webm" p)))
       (expect (buffer-string) :to-equal "![](/content/test/movie.webm)\n"))))
 
+(describe "porg-image-width"
+  (before-each
+    (porg-images-cache-clear))
+
+  (it "returns 0 for non-existent file"
+    (expect (porg-image-width "/non/existent/file.jpg") :to-equal 0))
+
+  (it "caches result and avoids repeated shell calls"
+    (let* ((temp-file (make-temp-file "porg-img-test" nil ".png"))
+           (call-count 0))
+      ;; Create a minimal valid PNG (1x1 pixel)
+      (with-temp-file temp-file
+        (insert (unibyte-string
+                 #x89 #x50 #x4e #x47 #x0d #x0a #x1a #x0a  ; PNG signature
+                 #x00 #x00 #x00 #x0d #x49 #x48 #x44 #x52  ; IHDR chunk
+                 #x00 #x00 #x00 #x01 #x00 #x00 #x00 #x01  ; 1x1
+                 #x08 #x02 #x00 #x00 #x00 #x90 #x77 #x53  ; 8-bit RGB
+                 #xde #x00 #x00 #x00 #x0c #x49 #x44 #x41  ; IDAT chunk
+                 #x54 #x08 #xd7 #x63 #xf8 #xff #xff #x3f
+                 #x00 #x05 #xfe #x02 #xfe #xdc #xcc #x59
+                 #xe7 #x00 #x00 #x00 #x00 #x49 #x45 #x4e  ; IEND chunk
+                 #x44 #xae #x42 #x60 #x82)))
+      (unwind-protect
+          (progn
+            (spy-on 'shell-command-to-string :and-call-fake
+                    (lambda (cmd)
+                      (setq call-count (1+ call-count))
+                      "100"))
+            ;; First call should invoke shell
+            (expect (porg-image-width temp-file) :to-equal 100)
+            (expect call-count :to-equal 1)
+            ;; Second call should use cache
+            (expect (porg-image-width temp-file) :to-equal 100)
+            (expect call-count :to-equal 1))
+        (delete-file temp-file))))
+
+  (it "invalidates cache when file is modified"
+    (let* ((temp-file (make-temp-file "porg-img-test" nil ".png"))
+           (call-count 0))
+      (with-temp-file temp-file (insert "fake-image-1"))
+      (unwind-protect
+          (progn
+            (spy-on 'shell-command-to-string :and-call-fake
+                    (lambda (cmd)
+                      (setq call-count (1+ call-count))
+                      (format "%d" (* call-count 100))))
+            ;; First call
+            (expect (porg-image-width temp-file) :to-equal 100)
+            (expect call-count :to-equal 1)
+            ;; Modify file (changes mtime and size)
+            (sleep-for 0.1)
+            (with-temp-file temp-file (insert "fake-image-2-longer"))
+            ;; Should call shell again due to changed mtime/size
+            (expect (porg-image-width temp-file) :to-equal 200)
+            (expect call-count :to-equal 2))
+        (delete-file temp-file))))
+
+  (it "clears cache with porg-images-cache-clear"
+    (let* ((temp-file (make-temp-file "porg-img-test" nil ".png"))
+           (call-count 0))
+      (with-temp-file temp-file (insert "fake-image"))
+      (unwind-protect
+          (progn
+            (spy-on 'shell-command-to-string :and-call-fake
+                    (lambda (cmd)
+                      (setq call-count (1+ call-count))
+                      "100"))
+            ;; First call
+            (porg-image-width temp-file)
+            (expect call-count :to-equal 1)
+            ;; Clear cache
+            (porg-images-cache-clear)
+            ;; Should call shell again
+            (porg-image-width temp-file)
+            (expect call-count :to-equal 2))
+        (delete-file temp-file)))))
+
 (describe "porg-make-publish"
   (it "returns a function"
     (let ((publish-fn (porg-make-publish

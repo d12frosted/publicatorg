@@ -1871,6 +1871,33 @@ Images wider than this will be resized to this width.")
 (defvar porg-images-quality 75
   "Default quality for cwebp compression (0-100).")
 
+(defvar porg--image-dimensions-cache (make-hash-table :test 'equal)
+  "Cache for image dimensions.
+Keys are \"filepath|mtime|size\", values are width in pixels.")
+
+(defun porg-image-width (filepath)
+  "Get width of image at FILEPATH, using cache when possible.
+Returns width in pixels as a number."
+  (if (not (file-exists-p filepath))
+      0
+    (let* ((attrs (file-attributes filepath))
+           (mtime (file-attribute-modification-time attrs))
+           (size (file-attribute-size attrs))
+           (cache-key (format "%s|%s|%s" filepath mtime size))
+           (cached (gethash cache-key porg--image-dimensions-cache)))
+      (or cached
+          (let ((width (string-to-number
+                        (shell-command-to-string
+                         (format "sips -g pixelWidth '%s' 2>/dev/null | awk '/pixelWidth/{print $2}'"
+                                 filepath)))))
+            (puthash cache-key width porg--image-dimensions-cache)
+            width)))))
+
+(defun porg-images-cache-clear ()
+  "Clear the image dimensions cache."
+  (interactive)
+  (clrhash porg--image-dimensions-cache))
+
 (defun porg-images-hash-default (obj)
   "Default hash function for images compiler.
 Uses file modification time and size for OBJ."
@@ -1905,10 +1932,7 @@ Uses cwebp + sips for fast image processing, with magick fallback."
                 (output (porg-item-target-abs item))
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
                                     max-width))
-                (width (string-to-number
-                        (shell-command-to-string
-                         (format "sips -g pixelWidth '%s' 2>/dev/null | awk '/pixelWidth/{print $2}'"
-                                 input)))))
+                (width (porg-image-width input)))
            (if (> width item-max-width)
                (unless (zerop (call-process-shell-command
                                (format "cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null"
@@ -1930,22 +1954,17 @@ Uses cwebp + sips for fast image processing, with magick fallback."
                 (output (porg-item-target-abs item))
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
                                     max-width))
-                (cmd (format "set -e; \
-if [ ! -f '%s' ]; then echo 'Source file not found: %s' >&2; exit 1; fi; \
-width=$(sips -g pixelWidth '%s' 2>/dev/null | awk '/pixelWidth/{print $2}'); \
-if [ \"$width\" -gt %d ]; then \
-  cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null || \
-    magick '%s' -strip -auto-orient -resize %dx100^ '%s'; \
-else \
-  cwebp -q %d '%s' -o '%s' 2>/dev/null || \
-    magick '%s' -strip -auto-orient '%s'; \
-fi"
-                             input input
-                             input item-max-width
-                             quality item-max-width input output
-                             input item-max-width output
-                             quality input output
-                             input output)))
+                (width (porg-image-width input))
+                (needs-resize (> width item-max-width))
+                (cmd (if needs-resize
+                         (format "cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null || \
+magick '%s' -strip -auto-orient -resize %dx100^ '%s'"
+                                 quality item-max-width input output
+                                 input item-max-width output)
+                       (format "cwebp -q %d '%s' -o '%s' 2>/dev/null || \
+magick '%s' -strip -auto-orient '%s'"
+                               quality input output
+                               input output))))
            (porg-async-shell-command cmd callback (file-name-nondirectory output)))
        ;; Non-convertible: just copy
        (copy-file (porg-item-item item) (porg-item-target-abs item) t)
