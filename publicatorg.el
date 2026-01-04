@@ -58,13 +58,17 @@ Set to nil to disable async compilation entirely.")
 
 (defvar porg-timing-results nil
   "Accumulated timing results from the last build.
-Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
+Structure: (:phases ALIST :compilers HASH-TABLE :compiler-items HASH-TABLE :cache ALIST)")
+
+(defvar porg-timing-top-n 20
+  "Number of slowest items to track per compiler.")
 
 (defun porg-timing-reset ()
   "Reset timing results for a new build."
   (setq porg-timing-results
         (list :phases nil
               :compilers (make-hash-table :test 'equal)
+              :compiler-items (make-hash-table :test 'equal)
               :cache nil)))
 
 (defun porg-timing-record-phase (name elapsed)
@@ -72,8 +76,9 @@ Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
   (when porg-timing-enabled
     (push (cons name elapsed) (plist-get porg-timing-results :phases))))
 
-(defun porg-timing-record-compiler (name elapsed)
-  "Record timing for compiler NAME with ELAPSED seconds."
+(defun porg-timing-record-compiler (name elapsed &optional item-id item-desc)
+  "Record timing for compiler NAME with ELAPSED seconds.
+If ITEM-ID and ITEM-DESC are provided, also track per-item timing."
   (when porg-timing-enabled
     (let* ((tbl (plist-get porg-timing-results :compilers))
            (existing (gethash name tbl)))
@@ -82,7 +87,17 @@ Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
                      :total (+ elapsed (or (plist-get existing :total) 0.0))
                      :min (min elapsed (or (plist-get existing :min) elapsed))
                      :max (max elapsed (or (plist-get existing :max) elapsed)))
-               tbl))))
+               tbl))
+    ;; Track per-item timing (keep top N slowest)
+    (when item-id
+      (let* ((items-tbl (plist-get porg-timing-results :compiler-items))
+             (items (gethash name items-tbl))
+             (entry (list :id item-id :desc item-desc :elapsed elapsed)))
+        ;; Insert into sorted list, keeping only top N
+        (setq items (cons entry items))
+        (setq items (seq-take (seq-sort-by (lambda (x) (plist-get x :elapsed)) #'> items)
+                              porg-timing-top-n))
+        (puthash name items items-tbl)))))
 
 (defun porg-timing-record-cache (operation elapsed)
   "Record timing for cache OPERATION with ELAPSED seconds."
@@ -100,19 +115,25 @@ Structure: (:phases ALIST :compilers HASH-TABLE :cache ALIST)")
                          (cons (cons operation (list :count 1 :total elapsed))
                                cache-timings)))))))
 
-(defmacro porg-timing-measure (category name &rest body)
+(defmacro porg-timing-measure (category name &rest args)
   "Measure execution time of BODY for CATEGORY/NAME.
-CATEGORY is one of: phase, compiler, cache."
+CATEGORY is one of: phase, compiler, cache.
+For compiler category, ARGS can be (:item-id ID :item-desc DESC BODY...)."
   (declare (indent 2))
-  `(if porg-timing-enabled
-       (let ((start-time (float-time)))
-         (prog1 (progn ,@body)
-           (let ((elapsed (- (float-time) start-time)))
-             (pcase ,category
-               ('phase (porg-timing-record-phase ,name elapsed))
-               ('compiler (porg-timing-record-compiler ,name elapsed))
-               ('cache (porg-timing-record-cache ,name elapsed))))))
-     ,@body))
+  (let* ((item-id (plist-get args :item-id))
+         (item-desc (plist-get args :item-desc))
+         (body (if item-id
+                   (seq-drop args 4)  ; skip :item-id val :item-desc val
+                 args)))
+    `(if porg-timing-enabled
+         (let ((start-time (float-time)))
+           (prog1 (progn ,@body)
+             (let ((elapsed (- (float-time) start-time)))
+               (pcase ,category
+                 ('phase (porg-timing-record-phase ,name elapsed))
+                 ('compiler (porg-timing-record-compiler ,name elapsed ,item-id ,item-desc))
+                 ('cache (porg-timing-record-cache ,name elapsed))))))
+       ,@body)))
 
 (defun porg-timing-report ()
   "Display timing report from the last build."
@@ -147,6 +168,26 @@ CATEGORY is one of: phase, compiler, cache."
                      (plist-get stats :min)
                      (plist-get stats :max))))
        compilers))
+
+    ;; Slowest items per compiler
+    (let ((compiler-items (plist-get porg-timing-results :compiler-items)))
+      (when (and compiler-items (> (hash-table-count compiler-items) 0))
+        (porg-log "")
+        (porg-log "Slowest Items by Compiler:")
+        (maphash
+         (lambda (name items)
+           (when items
+             (porg-log "")
+             (porg-log "  [%s] Top %d slowest:" name (length items))
+             (let ((rank 0))
+               (dolist (item items)
+                 (cl-incf rank)
+                 (porg-log "    %2d. %8.3fs  %s"
+                           rank
+                           (plist-get item :elapsed)
+                           (or (plist-get item :desc)
+                               (plist-get item :id)))))))
+         compiler-items)))
 
     ;; Cache timings
     (when cache
@@ -355,55 +396,44 @@ VARIANTS is a list of output alternatives. By each attachment has
 one default output (with no extra args) and extra output for each
 variant, which is passed as extra args in form of a
 plist (:variant)."
-  (->> note
-       (vulpea-note-path)
-       (emacsql (vulpea-db)
-                [:select id
-                 :from notes
-                 :where (= path $s1)])
-       (-map #'car)
-       (vulpea-db-query-by-ids)
-       (-mapcat
-        (lambda (a)
-          (->> a
-               (vulpea-note-links)
-               (--filter (and (string-equal (plist-get it :type) "attachment")
-                              (or (not filter) (funcall filter (plist-get it :dest)))))
-               (--map (plist-get it :dest))
-               (--mapcat
-                (let* ((dir (if (functionp dir) (funcall dir it) dir))
-                       (newname (concat (file-name-as-directory dir) it))
-                       (newnames (cond
-                                  ((null file-mod) (list newname))
-                                  ((functionp file-mod) (list (funcall file-mod newname)))
-                                  ((listp file-mod) (--map (funcall it newname) file-mod)))))
-                  (-map
-                   (lambda (newname)
-                     (cons
-                      (porg-rule-output
-                       :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
-                       :type "attachment"
-                       :item (expand-file-name it (vulpea-note-attach-dir a))
-                       :file newname)
-                      (-map
-                       (lambda (variant)
-                         (porg-rule-output
-                          :id (concat (vulpea-note-id (or owner note)) ":"
-                                      (file-name-nondirectory newname)
-                                      "@" (number-to-string variant))
-                          :type "attachment"
-                          :item (expand-file-name it (vulpea-note-attach-dir a))
-                          :file (porg-file-name-set-variant newname variant)
-                          :extra-args `(:variant ,variant)))
-                       variants)))
-                   newnames)))
-               (-flatten))))
-       (funcall
-        (lambda (list)
-          (let ((-compare-fn (lambda (a b)
-                               (string-equal (porg-rule-output-id a)
-                                             (porg-rule-output-id b)))))
-            (-distinct list))))))
+  (let ((attach-dir (vulpea-note-attach-dir note)))
+    (->> (vulpea-note-path note)
+         (vulpea-db-query-attachments-by-path)
+         (--filter (or (not filter) (funcall filter it)))
+         (--mapcat
+          (let* ((dir (if (functionp dir) (funcall dir it) dir))
+                 (newname (concat (file-name-as-directory dir) it))
+                 (newnames (cond
+                            ((null file-mod) (list newname))
+                            ((functionp file-mod) (list (funcall file-mod newname)))
+                            ((listp file-mod) (--map (funcall it newname) file-mod)))))
+            (-map
+             (lambda (newname)
+               (cons
+                (porg-rule-output
+                 :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
+                 :type "attachment"
+                 :item (expand-file-name it attach-dir)
+                 :file newname)
+                (-map
+                 (lambda (variant)
+                   (porg-rule-output
+                    :id (concat (vulpea-note-id (or owner note)) ":"
+                                (file-name-nondirectory newname)
+                                "@" (number-to-string variant))
+                    :type "attachment"
+                    :item (expand-file-name it attach-dir)
+                    :file (porg-file-name-set-variant newname variant)
+                    :extra-args `(:variant ,variant)))
+                 variants)))
+             newnames)))
+         (-flatten)
+         (funcall
+          (lambda (list)
+            (let ((-compare-fn (lambda (a b)
+                                 (string-equal (porg-rule-output-id a)
+                                               (porg-rule-output-id b)))))
+              (-distinct list)))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
@@ -785,7 +815,7 @@ and the time taken by garbage collection. See also
 (defvar porg--async-total 0
   "Total number of async jobs in current batch.")
 
-(defun porg--async-build-batch (async-items items cache _describe project-hash)
+(defun porg--async-build-batch (async-items items cache describe project-hash)
   "Build ASYNC-ITEMS using async compilers with limited concurrency.
 ITEMS is the full items hash-table, CACHE is the build cache,
 DESCRIBE is the describe function, PROJECT-HASH is the project hash.
@@ -810,33 +840,37 @@ Returns list of errors (each is (item-id . error-msg))."
 
           (cl-incf porg--async-running)
 
-          ;; Start the async process
-          (funcall async-build item items cache
-                   (lambda (success error-msg)
-                     ;; Callback when process completes
-                     (cl-decf porg--async-running)
-                     (cl-incf porg--async-completed)
+          ;; Capture item description before async starts
+          (let ((item-desc (funcall describe item)))
+            ;; Start the async process
+            (funcall async-build item items cache
+                     (lambda (success error-msg)
+                       ;; Callback when process completes
+                       (cl-decf porg--async-running)
+                       (cl-incf porg--async-completed)
 
-                     ;; Record timing
-                     (when porg-timing-enabled
-                       (porg-timing-record-compiler
-                        (porg-compiler-name compiler)
-                        (- (float-time) start-time)))
+                       ;; Record timing
+                       (when porg-timing-enabled
+                         (porg-timing-record-compiler
+                          (porg-compiler-name compiler)
+                          (- (float-time) start-time)
+                          item-id
+                          item-desc))
 
-                     (if success
-                         ;; Update cache on success
-                         (let ((rule (porg-item-rule item)))
-                           (porg-cache-put cache item-id
-                                           (porg-cache-item-create
-                                            :hash (porg-item-hash item)
-                                            :output (porg-item-target-rel item)
-                                            :project-hash project-hash
-                                            :rule (porg-rule-name rule)
-                                            :rule-hash (porg-sha1sum rule)
-                                            :compiler (porg-compiler-name compiler)
-                                            :compiler-hash (porg-sha1sum compiler))))
-                       ;; Record error
-                       (push (cons item-id error-msg) porg--async-errors))))))
+                       (if success
+                           ;; Update cache on success
+                           (let ((rule (porg-item-rule item)))
+                             (porg-cache-put cache item-id
+                                             (porg-cache-item-create
+                                              :hash (porg-item-hash item)
+                                              :output (porg-item-target-rel item)
+                                              :project-hash project-hash
+                                              :rule (porg-rule-name rule)
+                                              :rule-hash (porg-sha1sum rule)
+                                              :compiler (porg-compiler-name compiler)
+                                              :compiler-hash (porg-sha1sum compiler))))
+                         ;; Record error
+                         (push (cons item-id error-msg) porg--async-errors)))))))
 
       ;; Wait a bit before checking again
       (when (> porg--async-running 0)
@@ -980,6 +1014,8 @@ Returns the process object."
                         (unless porg-dry-run
                           (when-let* ((build (porg-compiler-build compiler)))
                             (porg-timing-measure 'compiler compiler-name
+                              :item-id (porg-item-id item)
+                              :item-desc (funcall describe item)
                               (funcall build item items cache)))
                           (porg-cache-put cache
                                           (porg-item-id item)
@@ -1431,7 +1467,6 @@ CONTENT-PREFIX is the prefix to strip from the target path (e.g.,
 If the link points to a note in ITEMS, transforms it to a file link
 with the appropriate path. Otherwise, converts the link to plain text."
   (if-let* ((id (org-ml-get-property :path link))
-            (note (vulpea-db-get-by-id id))
             (item (gethash id items))
             (file (porg-item-target-rel item))
             (path (->> file
