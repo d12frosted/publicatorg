@@ -1393,6 +1393,24 @@ Result is a property list (:compile :delete)."
      (seq-reverse (org-element-map (org-element-parse-buffer) 'headline #'identity)))
     (save-buffer)))
 
+(defun porg--link-to-string (link)
+  "Convert LINK element to org link syntax string.
+This is a fast alternative to `org-ml-to-string' for link elements."
+  (let ((type (org-ml-get-property :type link))
+        (path (org-ml-get-property :path link))
+        (contents (org-element-contents link))
+        (post-blank (or (org-ml-get-property :post-blank link) 0)))
+    (concat
+     (if contents
+         (format "[[%s:%s][%s]]" type path
+                 (mapconcat (lambda (child)
+                              (if (stringp child)
+                                  child
+                                (or (org-element-property :value child) "")))
+                            contents ""))
+       (format "[[%s:%s]]" type path))
+     (make-string post-blank ?\s))))
+
 (cl-defun porg-clean-links-in-buffer (&key sanitize-id-fn
                                            sanitize-attachment-fn
                                            sanitize-file-fn)
@@ -1412,29 +1430,49 @@ SANITIZE-FILE-FN is called with link to allow custom modifications.
 
 If it's HTTPS or MAILTO link, then it's kept as is without modifications.
 
-All other links are transformed to plain text."
-  (-> (seq-reverse (org-element-map (org-element-parse-buffer) 'link #'identity))
-      (--each
-          (org-ml-update
-           (lambda (link)
-             (let ((type (org-ml-get-property :type link)))
-               (cond
-                ((seq-contains-p '("https") type) link)
-                ((seq-contains-p '("mailto") type) link)
+All other links are transformed to plain text.
 
-                ((string-equal type "attachment")
-                 (if sanitize-attachment-fn (funcall sanitize-attachment-fn link) link))
+This function is optimized to parse the buffer only once and apply
+all modifications in a single reverse pass, avoiding the O(n²)
+overhead of repeated org-ml-update calls."
+  (let ((replacements nil))
+    ;; Phase 1: Parse once and collect all replacements
+    (dolist (link (org-element-map (org-element-parse-buffer) 'link #'identity))
+      (let* ((type (org-ml-get-property :type link))
+             (begin (org-ml-get-property :begin link))
+             (end (org-ml-get-property :end link))
+             (post-blank (or (org-ml-get-property :post-blank link) 0))
+             (result
+              (cond
+               ((member type '("https" "mailto")) nil)  ; keep as-is
 
-                ((string-equal type "file")
-                 (if sanitize-file-fn (funcall sanitize-file-fn link) link))
+               ((string-equal type "attachment")
+                (when sanitize-attachment-fn
+                  (funcall sanitize-attachment-fn link)))
 
-                ((string-equal type "id")
-                 (if sanitize-id-fn (funcall sanitize-id-fn link) link))
+               ((string-equal type "file")
+                (when sanitize-file-fn
+                  (funcall sanitize-file-fn link)))
 
-                (t (org-ml-from-string
-                    'plain-text
-                    (concat (nth 2 link) (s-repeat (or (org-ml-get-property :post-blank link) 0) " ")))))))
-           it))))
+               ((string-equal type "id")
+                (when sanitize-id-fn
+                  (funcall sanitize-id-fn link)))
+
+               (t  ; Convert unknown link types to plain text
+                (concat (or (car (org-element-contents link)) "")
+                        (make-string post-blank ?\s))))))
+        (when result
+          (push (list begin end result) replacements))))
+
+    ;; Phase 2: Apply replacements in reverse order (end to start)
+    (pcase-dolist (`(,begin ,end ,result) (sort replacements (lambda (a b) (> (car a) (car b)))))
+      (let ((replacement-text
+             (if (stringp result)
+                 result  ; Already a string (plain text replacement)
+               (porg--link-to-string result))))  ; Link element
+        (delete-region begin end)
+        (goto-char begin)
+        (insert replacement-text)))))
 
 (defun porg-sha1sum-attachment (obj)
   "Calculate sha1sum of attachment OBJ from vulpea database.
