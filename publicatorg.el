@@ -2015,9 +2015,15 @@ VIDEO-CHECK-FN is a function that returns t if a path is a video.
 Defaults to `porg-supported-video-p'.
 
 Performs the following cleanups:
+- Fixes GFM math syntax from $`...`$ to $...$
 - Removes file:// prefixes from links
 - Converts video links from text links to image syntax"
   (let ((video-check-fn (or video-check-fn #'porg-supported-video-p)))
+    ;; fix GFM math syntax $`..`$ -> $...$
+    (goto-char (point-min))
+    (while (search-forward-regexp "\\$`\\([^`]+\\)`\\$" nil t)
+      (replace-match "$\\1$"))
+
     ;; fix attachment links
     (goto-char (point-min))
     (while (search-forward "file://" nil t)
