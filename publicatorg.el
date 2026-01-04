@@ -412,6 +412,18 @@ plist (:variant)."
    :type "$$void$$"
    :item note))
 
+(cl-defun porg-rule-void (&key name tags)
+  "Create a rule with NAME that voids notes matching TAGS.
+
+This is useful for notes that should be processed (e.g., as soft
+dependencies) but not published as standalone content.
+
+TAGS is a list of tags that notes must have to match this rule."
+  (porg-rule
+   :name name
+   :match (lambda (note) (apply (-partial #'vulpea-note-tagged-all-p note) tags))
+   :outputs (lambda (note) (list (porg-void-output note)))))
+
 (cl-defmethod porg-rule-output-that ((output porg-rule-output) &key type predicate)
   "Check that OUTPUT has TYPE and satisfies PREDICATE (optional)."
   (and (string-equal (porg-rule-output-type output) type)
