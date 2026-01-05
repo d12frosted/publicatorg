@@ -4,7 +4,7 @@
 ;;
 ;; Author: Boris Buliga <boris@d12frosted.io>
 ;; Maintainer: Boris Buliga <boris@d12frosted.io>
-;; Version: 0.1
+;; Version: 1.0.0-rc.1
 ;; Package-Requires: ((emacs "29.1") (emacsql "3.0.0") (vulpea "2.0.0") (org-ml "5.8"))
 ;;
 ;; Created: 08 Jul 2022
