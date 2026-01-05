@@ -1,0 +1,45 @@
+#+title: Changelog
+
+All notable changes to this project will be documented in this file.
+
+* v1.0.0-rc.1
+
+First release candidate.
+
+** Features
+
+- Incremental builds with intelligent caching
+- Two cache backends: file (git-friendly) and SQLite (faster)
+- Parallel async compilation with configurable concurrency (=porg-async-max-jobs=)
+- Flexible rules for matching notes by tags, properties, or custom predicates
+- Multiple output types: notes, attachments, JSON metadata, void
+- Built-in image optimization with WebP conversion and resizing
+- Built-in video copying
+- Dependency tracking with hard and soft dependencies
+- Topological sorting for correct build order
+- Batch rules for whole-project operations (indexes, sitemaps)
+- Timing and profiling support (=porg-run-timed=, =porg-timing-report=)
+- Dry-run mode for previewing builds
+
+** Built-in Compilers
+
+- =porg-images-compiler= - WebP conversion with cwebp, ImageMagick fallback
+- =porg-videos-compiler= - Video file copying
+- =porg-make-publish= - Org to Markdown conversion with link sanitization
+
+** Utilities
+
+- =porg-slug= - URL-friendly slug generation
+- =porg-file-name-for-web= - Web-safe file names with WebP extension
+- =porg-sanitize-id-link= - Convert org ID links to file links
+- =porg-extract-content= - Extract content skipping metadata section
+- =porg-sha1sum=, =porg-sha1sum-attachment= - Content hashing
+- =porg-supported-media-p=, =porg-supported-image-p=, =porg-supported-video-p= - Media detection
+
+** Documentation
+
+- Comprehensive README with quick start guide
+- Getting started tutorial
+- Core concepts documentation
+- Complete API reference
+- Real-world examples from production sites
