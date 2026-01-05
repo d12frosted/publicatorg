@@ -1,12 +1,108 @@
-* publicatorg
-:PROPERTIES:
-:ID:                     30b51992-80b5-4552-ae90-15fc6114f22c
-:END:
+#+title: publicatorg
+#+author: Boris Buliga
 
 *Publicator* - something that makes something public.
 
 *Org* - A GNU Emacs major mode for keeping notes.
 
-*Publicatorg* - something that makes org notes public.
+*Publicatorg* - something that makes [[https://github.com/d12frosted/vulpea][vulpea]] notes public.
 
-Documentation is to be done. Use [[https://github.com/d12frosted/barberry.io][barberry.io]] as example of publicatorg usage.
+Publicatorg is an incremental build system for publishing [[https://github.com/d12frosted/vulpea][vulpea]] notes to the web. It transforms your personal knowledge base into published content with support for parallel compilation, intelligent caching, and flexible output rules.
+
+* Features
+
+- *Incremental builds* - Only rebuild what changed
+- *Parallel compilation* - Async processing with configurable concurrency
+- *Flexible rules* - Match notes by tags, properties, or custom predicates
+- *Multiple output types* - Notes, attachments, JSON metadata, and more
+- *Image optimization* - Automatic WebP conversion and resizing
+- *Dependency tracking* - Hard and soft dependencies between outputs
+- *Two cache backends* - File-based (git-friendly) or SQLite (faster)
+
+* Installation
+
+Publicatorg requires Emacs 29.1+ and depends on:
+- [[https://github.com/d12frosted/vulpea][vulpea]] 2.0+
+- [[https://github.com/magit/emacsql][emacsql]] 3.0+
+- [[https://github.com/ndwarshuis/org-ml][org-ml]] 5.8+
+
+#+begin_src emacs-lisp
+;; Using straight.el
+(straight-use-package
+ '(publicatorg :host github :repo "d12frosted/publicatorg"))
+
+;; Using use-package with straight
+(use-package publicatorg
+  :straight (:host github :repo "d12frosted/publicatorg"))
+#+end_src
+
+* Quick Start
+
+Define a project in your =build-rules.el=:
+
+#+begin_src emacs-lisp
+(require 'publicatorg)
+
+(porg-define
+ :name "my-blog"
+ :root "/path/to/output"
+ :cache-file "notes-cache"
+
+ :input
+ (lambda ()
+   (vulpea-db-query-by-tags-every '("public")))
+
+ :rules
+ (list
+  (porg-rule
+   :name "posts"
+   :match (-rpartial #'vulpea-note-tagged-all-p "post")
+   :outputs
+   (porg-make-outputs
+    :file (lambda (note)
+            (format "posts/%s.md" (porg-slug (vulpea-note-title note))))
+    :attach-dir (lambda (note _) "images"))))
+
+ :compilers
+ (list
+  (porg-compiler
+   :name "posts"
+   :match (-rpartial #'porg-rule-output-that :type "note")
+   :hash #'porg-sha1sum
+   :build (porg-make-publish))
+  (porg-images-compiler)))
+#+end_src
+
+Run the build:
+
+#+begin_src emacs-lisp
+(porg-run "my-blog")       ; Execute build
+(porg-run-dry "my-blog")   ; Preview changes without executing
+(porg-run-timed "my-blog") ; Build with timing report
+#+end_src
+
+* Core Concepts
+
+- *Projects* - Container for rules, compilers, and build configuration
+- *Rules* - Match notes and define what outputs to generate
+- *Outputs* - Individual items to build (notes, attachments, JSON, etc.)
+- *Compilers* - Execute the actual build logic for each output type
+- *Cache* - Track what was built to enable incremental rebuilds
+
+See [[file:docs/concepts.org][Core Concepts]] for detailed explanations.
+
+* Documentation
+
+- [[file:docs/getting-started.org][Getting Started]] - Step-by-step tutorial
+- [[file:docs/concepts.org][Core Concepts]] - Architecture and design
+- [[file:docs/api-reference.org][API Reference]] - Complete function documentation
+- [[file:docs/examples.org][Examples]] - Real-world usage patterns
+
+* Real-World Examples
+
+- [[https://github.com/d12frosted/d12frosted.io][d12frosted.io]] - Personal blog
+- [[https://github.com/d12frosted/barberry.io][barberry.io]] - Wine tasting platform with complex data models
+
+* License
+
+GPLv3. See [[file:LICENSE][LICENSE]] for details.

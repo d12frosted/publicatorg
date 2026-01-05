@@ -1,0 +1,418 @@
+#+title: Core Concepts
+#+author: Boris Buliga
+
+This document explains the architecture and design of publicatorg.
+
+* Overview
+
+Publicatorg transforms vulpea notes into published content through a pipeline:
+
+#+begin_example
+┌─────────────┐     ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
+│   Input     │ --> │   Rules     │ --> │   Build     │ --> │   Output    │
+│  (notes)    │     │  (outputs)  │     │ (compilers) │     │  (files)    │
+└─────────────┘     └─────────────┘     └─────────────┘     └─────────────┘
+                                              │
+                                              v
+                                        ┌─────────────┐
+                                        │   Cache     │
+                                        │ (skip done) │
+                                        └─────────────┘
+#+end_example
+
+* Projects
+
+A project is the top-level container that ties everything together.
+
+** Definition
+
+#+begin_src emacs-lisp
+(porg-define
+ :name "my-project"        ; Unique identifier
+ :root "/path/to/output"   ; Output directory
+ :cache-file "cache"       ; Cache file name (without extension)
+ :input (lambda () ...)    ; Function returning notes to process
+ :describe #'porg-describe ; Optional: custom description function
+ :rules (list ...)         ; List of rules
+ :compilers (list ...))    ; List of compilers
+#+end_src
+
+** Project Properties
+
+- =:name= - Unique string identifier used with =porg-run=
+- =:root= - Base directory for all output paths
+- =:cache-file= - Name of cache file (extension added based on backend)
+- =:input= - Function returning list of =vulpea-note= objects to process
+- =:describe= - Custom function to describe items in logs
+- =:rules= - List of =porg-rule= and =porg-batch-rule= objects
+- =:compilers= - List of =porg-compiler= objects
+
+* Rules
+
+Rules match notes and define what outputs to generate.
+
+** Basic Structure
+
+#+begin_src emacs-lisp
+(porg-rule
+ :name "posts"                                     ; Unique name
+ :match (lambda (note) ...)                        ; Predicate on vulpea-note
+ :outputs (lambda (note) (list ...)))              ; Returns list of outputs
+#+end_src
+
+** Match Predicate
+
+The =:match= function receives a =vulpea-note= and returns non-nil if the rule applies:
+
+#+begin_src emacs-lisp
+;; Match notes with specific tag
+:match (-rpartial #'vulpea-note-tagged-all-p "post")
+
+;; Match notes with multiple tags
+:match (lambda (note)
+         (vulpea-note-tagged-all-p note "wine" "cellar"))
+
+;; Custom predicate
+:match (lambda (note)
+         (vulpea-utils-with-note note
+           (vulpea-buffer-prop-get "publish")))
+#+end_src
+
+** Outputs Function
+
+The =:outputs= function returns a list of =porg-rule-output= objects:
+
+#+begin_src emacs-lisp
+:outputs
+(lambda (note)
+  (list
+   (porg-note-output note :file "path/to/output.md")
+   (porg-attachments-output note :dir "images")))
+#+end_src
+
+* Output Types
+
+** Note Output
+
+For publishing the note content itself:
+
+#+begin_src emacs-lisp
+(porg-note-output note
+ :file "posts/my-post.md"
+ :soft-deps '("dep-id-1" "dep-id-2")  ; Rebuild when these change
+ :hard-deps '("req-id-1"))            ; Fail if these missing
+#+end_src
+
+** Attachment Output
+
+For media files attached to notes:
+
+#+begin_src emacs-lisp
+(porg-attachments-output note
+ :dir "images"                        ; Output directory
+ :file-mod #'porg-file-name-for-web   ; Modify file names
+ :filter #'porg-supported-image-p     ; Only include images
+ :owner other-note                    ; Steal to different owner
+ :variants '(800 400))                ; Generate multiple sizes
+#+end_src
+
+** Void Output
+
+For notes that should be processed but not published:
+
+#+begin_src emacs-lisp
+(porg-void-output note)
+#+end_src
+
+** Convenience: porg-make-outputs
+
+Combines note and attachment outputs with automatic dependency setup:
+
+#+begin_src emacs-lisp
+(porg-make-outputs
+ :file (lambda (note) "posts/slug.md")
+ :attach-dir (lambda (note attachment) "images/slug")
+ :attach-filter #'porg-supported-media-p
+ :attach-file-mod #'porg-file-name-for-web
+ :soft-deps (lambda (note) (get-linked-ids note))
+ :hard-deps (lambda (note) nil)
+ :outputs-extra (lambda (note-output)
+                  (list (make-json-output note-output))))
+#+end_src
+
+* Dependencies
+
+** Soft Dependencies
+
+Soft dependencies trigger rebuilds when the dependency changes, but the build doesn't fail if they're missing:
+
+#+begin_src emacs-lisp
+(porg-note-output note
+ :file "post.md"
+ :soft-deps (vulpea-note-meta-get-list note "related" 'link))
+#+end_src
+
+Use cases:
+- Linked notes that might affect rendering
+- Optional references
+
+** Hard Dependencies
+
+Hard dependencies must be built before this item, and missing ones cause build failure:
+
+#+begin_src emacs-lisp
+(porg-note-output note
+ :file "wine.md"
+ :hard-deps (list (vulpea-note-meta-get note "producer" 'link)))
+#+end_src
+
+Use cases:
+- Required data from other notes
+- Attachments that must exist
+
+** Automatic Dependencies
+
+When using =porg-make-outputs=, attachments are automatically added as hard dependencies of the note output.
+
+* Batch Rules
+
+Batch rules run after all regular items are built, with access to all built items:
+
+#+begin_src emacs-lisp
+(porg-batch-rule
+ :name "image-index"
+ :filter (-rpartial #'porg-item-that
+                    :type "attachment"
+                    :predicate #'porg-supported-image-p)
+ :target "components/images.tsx"
+ :publish (lambda (target items all-items cache)
+            ;; Generate TypeScript index of all images
+            ...))
+#+end_src
+
+Use cases:
+- Generate indexes
+- Create sitemaps
+- Build RSS feeds
+
+* Compilers
+
+Compilers transform outputs into actual files.
+
+** Structure
+
+#+begin_src emacs-lisp
+(porg-compiler
+ :name "posts"                        ; For logging
+ :match (lambda (output) ...)         ; Which outputs to handle
+ :build (lambda (item items cache)    ; Sync build function
+          ...)
+ :async-build (lambda (item items cache callback)  ; Optional async
+                ...)
+ :clean (lambda (item cache)          ; Cleanup function
+          ...)
+ :hash (lambda (item)                 ; Change detection
+         ...))
+#+end_src
+
+** Match Function
+
+Matches on =porg-rule-output= (before resolution) or =porg-item= (after):
+
+#+begin_src emacs-lisp
+;; Match by output type
+:match (-rpartial #'porg-rule-output-that :type "note")
+
+;; Match by type AND note predicate
+:match (-rpartial #'porg-rule-output-that
+                  :type "note"
+                  :predicate (-rpartial #'vulpea-note-tagged-all-p "post"))
+#+end_src
+
+** Build Function
+
+Receives the item to build, all items, and cache:
+
+#+begin_src emacs-lisp
+:build (lambda (item items cache)
+         (let ((source (porg-item-item item))
+               (target (porg-item-target-abs item)))
+           ;; Do the work
+           (copy-file source target t)))
+#+end_src
+
+** Async Build
+
+For parallel compilation, provide =:async-build=:
+
+#+begin_src emacs-lisp
+:async-build (lambda (item items cache callback)
+               (porg-async-shell-command
+                (format "convert %s %s"
+                        (porg-item-item item)
+                        (porg-item-target-abs item))
+                callback))
+#+end_src
+
+The callback receives =(success error-message)=.
+
+** Built-in Compilers
+
+*** porg-images-compiler
+
+Optimizes and converts images to WebP:
+
+#+begin_src emacs-lisp
+(porg-images-compiler
+ :max-width 1600   ; Resize if wider (default)
+ :quality 75       ; WebP quality 0-100 (default)
+ :hash #'porg-sha1sum-attachment)
+#+end_src
+
+*** porg-videos-compiler
+
+Copies video files:
+
+#+begin_src emacs-lisp
+(porg-videos-compiler
+ :hash #'porg-sha1sum-attachment)
+#+end_src
+
+*** porg-make-publish
+
+Creates a compiler for org-to-markdown conversion:
+
+#+begin_src emacs-lisp
+(porg-make-publish
+ :copy-fn #'my-content-extractor      ; Custom content extraction
+ :image-dir-fn (lambda (item) "img")  ; Image directory for links
+ :sanitize-id-fn (lambda (items)      ; Link sanitization
+                   (lambda (link)
+                     (porg-sanitize-id-link link items))))
+#+end_src
+
+* Cache System
+
+The cache enables incremental builds by tracking what was built.
+
+** Backends
+
+*** File Backend
+
+#+begin_src emacs-lisp
+(setf porg-cache-backend 'file)
+(setf porg-cache-file-method 'pp)  ; or 'prin1 for speed
+#+end_src
+
+- Stores as Lisp S-expression
+- Git-friendly with ='pp= (pretty-printed)
+- Faster with ='prin1= (compact)
+
+*** SQLite Backend
+
+#+begin_src emacs-lisp
+(setf porg-cache-backend 'sqlite)
+#+end_src
+
+- Faster for large projects
+- Incremental updates
+- Better for frequent rebuilds
+
+** Cache Invalidation
+
+An item is rebuilt when any of these change:
+- Content hash (from =:hash= function)
+- Output path
+- Rule definition (hash of rule struct)
+- Compiler definition (hash of compiler struct)
+- Any soft or hard dependency
+
+* Async Compilation
+
+Publicatorg can run async compilers in parallel.
+
+** Configuration
+
+#+begin_src emacs-lisp
+(setf porg-async-max-jobs 8)  ; Max parallel jobs
+#+end_src
+
+** How It Works
+
+1. Items are sorted topologically by dependencies
+2. Items are grouped into levels that can run in parallel
+3. Each level waits for the previous to complete
+4. Within a level, up to =porg-async-max-jobs= run concurrently
+
+** Creating Async Compilers
+
+Use =porg-async-shell-command= helper:
+
+#+begin_src emacs-lisp
+:async-build
+(lambda (item items cache callback)
+  (porg-async-shell-command
+   (format "cwebp -q 80 %s -o %s"
+           (shell-quote-argument (porg-item-item item))
+           (shell-quote-argument (porg-item-target-abs item)))
+   callback))
+#+end_src
+
+* Timing and Profiling
+
+** Enable Timing
+
+#+begin_src emacs-lisp
+(porg-run-timed "my-project")
+#+end_src
+
+** View Report
+
+#+begin_src emacs-lisp
+(porg-timing-report)
+#+end_src
+
+Shows:
+- Build phase timings
+- Per-compiler statistics (count, total, avg, min, max)
+- Slowest items per compiler
+- Cache operation timings
+
+** Configuration
+
+#+begin_src emacs-lisp
+(setf porg-timing-top-n 20)  ; Track top N slowest items
+#+end_src
+
+* Data Structures
+
+** porg-item
+
+Resolved, ready-to-build item:
+
+#+begin_src emacs-lisp
+(porg-item-id item)          ; Unique identifier
+(porg-item-type item)        ; "note", "attachment", etc.
+(porg-item-item item)        ; Original item (note or path)
+(porg-item-target-rel item)  ; Relative output path
+(porg-item-target-abs item)  ; Absolute output path
+(porg-item-rule item)        ; Rule that created it
+(porg-item-compiler item)    ; Compiler that builds it
+(porg-item-hard-deps item)   ; List of hard dependency IDs
+(porg-item-soft-deps item)   ; List of soft dependency IDs
+(porg-item-extra-args item)  ; Additional arguments
+#+end_src
+
+** porg-cache-item
+
+Cache entry for an item:
+
+#+begin_src emacs-lisp
+(porg-cache-item-hash item)          ; Content hash
+(porg-cache-item-output item)        ; Output path
+(porg-cache-item-project-hash item)  ; Project config hash
+(porg-cache-item-rule item)          ; Rule name
+(porg-cache-item-rule-hash item)     ; Rule definition hash
+(porg-cache-item-compiler item)      ; Compiler name
+(porg-cache-item-compiler-hash item) ; Compiler definition hash
+#+end_src

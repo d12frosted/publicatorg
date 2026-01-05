@@ -1,0 +1,467 @@
+#+title: Real-World Examples
+#+author: Boris Buliga
+
+This document shows real patterns from production publicatorg sites.
+
+* Simple Blog (d12frosted.io)
+
+A personal blog with posts, images, and JSON metadata.
+
+** Input Selection
+
+Only publish file-level notes tagged with =d12frosted/public=:
+
+#+begin_src emacs-lisp
+:input
+(lambda ()
+  (--filter
+   (and (null (vulpea-note-primary-title it))  ; Skip aliases
+        (= 0 (vulpea-note-level it)))          ; Only top-level notes
+   (vulpea-db-query-by-tags-every '("d12frosted/public"))))
+#+end_src
+
+** Void Rules for Soft Dependencies
+
+Some notes are only used as data sources:
+
+#+begin_src emacs-lisp
+(porg-rule-void :name "grapes" :tags '("wine" "grape"))
+(porg-rule-void :name "countries" :tags '("wine" "country"))
+(porg-rule-void :name "regions" :tags '("wine" "region"))
+(porg-rule-void :name "places" :tags '("places"))
+#+end_src
+
+** Posts with Date-Based Paths
+
+Posts use date from buffer properties:
+
+#+begin_src emacs-lisp
+(porg-rule
+ :name "posts"
+ :match (-rpartial #'vulpea-note-tagged-all-p "post")
+ :outputs
+ (porg-make-outputs
+  :file
+  (lambda (note)
+    (concat
+     "src/public/content/posts/"
+     (vulpea-utils-with-note note
+       (let ((date (vulpea-buffer-prop-get "date"))
+             (slug (or (vulpea-buffer-prop-get "slug")
+                       (porg-slug (vulpea-note-title note)))))
+         (concat (org-read-date nil nil date) "-" slug)))
+     ".md"))
+  :attach-dir
+  (lambda (note attachment)
+    (let* ((date (vulpea-utils-with-note note
+                   (vulpea-buffer-prop-get "date")))
+           (slug (vulpea-utils-with-note note
+                   (or (vulpea-buffer-prop-get "slug")
+                       (porg-slug (vulpea-note-title note)))))
+           (name (concat (org-read-date nil nil date) "-" slug)))
+      (if (porg-supported-video-p attachment)
+          (concat "src/public/content/" name)
+        (concat "src/public/content/images/" name))))
+  :outputs-extra
+  (lambda (output)
+    (let ((note (porg-rule-output-item output)))
+      (list
+       (porg-rule-output
+        :id (concat (vulpea-note-id note) ".json")
+        :type "json"
+        :item note
+        :file (porg-file-name-replace-ext
+               (porg-rule-output-file output) "json")
+        :hard-deps (list (porg-rule-output-id output))))))))
+#+end_src
+
+** Custom porg-describe
+
+Project-specific item descriptions:
+
+#+begin_src emacs-lisp
+(cl-defmethod porg-describe ((note vulpea-note))
+  "Describe NOTE."
+  (let ((tags (vulpea-note-tags note)))
+    (format "(%s) %s"
+            (cond
+             ((seq-contains-p tags "post") "post")
+             ((seq-contains-p tags "page") "page")
+             (t "???"))
+            (vulpea-note-title note))))
+#+end_src
+
+** Batch Rule for Image Index
+
+Generate TypeScript imports for Next.js:
+
+#+begin_src emacs-lisp
+(porg-batch-rule
+ :name "nextjs/images"
+ :filter (-rpartial #'porg-item-that
+                    :type "attachment"
+                    :predicate #'porg-supported-image-p)
+ :target "src/components/content/images.tsx"
+ :publish #'blog-publish-nextjs/images)
+#+end_src
+
+The publish function generates:
+
+#+begin_src typescript
+import pic_abc123 from "../../public/content/images/post/image.webp";
+
+const lookupMap = new Map<string, StaticImageData>([
+  ["/images/post/image.webp", pic_abc123],
+]);
+
+export function getImage(path: string): StaticImageData {
+  const res = lookupMap.get(path);
+  if (res) return res;
+  throw new Error(`Image ${path} not found`);
+}
+#+end_src
+
+* Complex Multi-Type Site (barberry.io)
+
+A wine tasting platform with wines, ratings, producers, and convives.
+
+** Multiple Content Types
+
+Different rules for different content:
+
+#+begin_src emacs-lisp
+;; Wines
+(porg-rule
+ :name "wines"
+ :match (-rpartial #'vulpea-note-tagged-all-p "wine" "cellar")
+ :outputs
+ (blog-make-outputs
+  :file (lambda (note)
+          (concat "src/public/content/wines/"
+                  (vulpea-note-id note) ".md"))
+  :hard-deps
+  (lambda (note)
+    (-concat
+     (list (vulpea-note-meta-get note "producer" 'link))
+     (vulpea-note-meta-get-list note "ratings" 'link)))
+  :outputs-extra ...))
+
+;; Ratings
+(porg-rule
+ :name "ratings"
+ :match (-rpartial #'vulpea-note-tagged-all-p "wine" "rating")
+ :outputs
+ (blog-make-outputs
+  :file (lambda (note)
+          (concat "src/public/content/ratings/"
+                  (vulpea-note-id note) ".md"))
+  :outputs-extra ...))
+
+;; Producers
+(porg-rule
+ :name "producers"
+ :match (-rpartial #'vulpea-note-tagged-all-p "wine" "producer")
+ :outputs
+ (blog-make-outputs
+  :file (lambda (note)
+          (concat "src/public/content/producers/"
+                  (vulpea-note-id note) ".md"))
+  :outputs-extra ...))
+#+end_src
+
+** Content-Type Specific Compilers
+
+Different compilers for different note types:
+
+#+begin_src emacs-lisp
+(porg-compiler
+ :name "wine"
+ :match (-rpartial #'porg-rule-output-that
+                   :type "note"
+                   :predicate (-rpartial #'vulpea-note-tagged-all-p
+                                         "wine" "cellar"))
+ :hash #'porg-sha1sum
+ :build (porg-make-publish
+         :copy-fn #'blog-build-post
+         :image-dir-fn #'blog-image-dir
+         :sanitize-id-fn (lambda (items)
+                           (-rpartial #'porg-sanitize-id-link items
+                                      :content-prefix "src/public/content")))
+ :clean #'porg-delete-with-metadata)
+#+end_src
+
+** Rich JSON Data
+
+Extracting structured metadata from vulpea-meta:
+
+#+begin_src emacs-lisp
+(porg-compiler
+ :name "data/wine"
+ :match (-rpartial #'porg-rule-output-that
+                   :type "json"
+                   :predicate (-rpartial #'vulpea-note-tagged-all-p
+                                         "wine" "cellar"))
+ :hash #'porg-sha1sum
+ :build
+ (lambda (item items _cache)
+   (let* ((note (porg-item-item item))
+          (colour (vulpea-note-meta-get note "colour"))
+          (producer (vulpea-note-meta-get note "producer" 'note))
+          (grapes (vulpea-note-meta-get-list note "grapes" 'note))
+          (vintage (when-let ((v (vulpea-note-meta-get note "vintage")))
+                     (string-to-number v)))
+          (rating (vulpea-note-meta-get note "rating" 'number))
+          (json-encoding-pretty-print t))
+     (with-current-buffer (find-file-noselect (porg-item-target-abs item))
+       (delete-region (point-min) (point-max))
+       (insert
+        (json-encode
+         `((id . ,(vulpea-note-id note))
+           (name . ,(vulpea-note-meta-get note "name"))
+           (producer . (:id ,(vulpea-note-id producer)
+                        :name ,(vulpea-note-title producer)))
+           (vintage . ,vintage)
+           (colour . ,colour)
+           (grapes . ,(--map `(:id ,(vulpea-note-id it)
+                               :name ,(vulpea-note-title it))
+                             grapes))
+           (rating . ,rating))))
+       (save-buffer)))))
+#+end_src
+
+** Convive Data with Reverse Lookups
+
+Building data that references other items:
+
+#+begin_src emacs-lisp
+(porg-rule
+ :name "convive"
+ :match (-rpartial #'vulpea-note-tagged-all-p "barberry/convive")
+ :outputs
+ (lambda (note)
+   (list
+    (porg-rule-output
+     :id (concat "convive:" (vulpea-note-id note) ".json")
+     :type "convive:json"
+     :item note
+     :file (concat "src/public/content/convives/"
+                   (vulpea-note-id note) ".json")
+     :soft-deps
+     ;; Find all ratings by this convive
+     (let ((ratings (->> `((id . ,(vulpea-note-id note)))
+                         (vulpea-db-query-by-links-some)
+                         (--filter (vulpea-note-tagged-all-p it
+                                    "wine" "rating")))))
+       ratings)))))
+#+end_src
+
+* Media-Heavy Site (tasogare)
+
+A site with works (anime, books, films, etc.) and posts about them.
+
+** Category-Based Routing
+
+Different paths based on content category:
+
+#+begin_src emacs-lisp
+(defconst tasogare-work-categories '("anime" "books" "games" "films" "manga"))
+
+(defun tasogare-note-category (note)
+  "Extract category from NOTE tags."
+  (let ((tags (vulpea-note-tags note)))
+    (--first (seq-contains-p tasogare-work-categories it) tags)))
+
+(defun tasogare-work-output-path (note)
+  "Return output path for work NOTE."
+  (let ((category (tasogare-note-category note))
+        (slug (tasogare-slug note)))
+    (format "public/content/works/%s/%s.md" category slug)))
+#+end_src
+
+** Building Reverse Indexes
+
+Track which posts reference which works:
+
+#+begin_src emacs-lisp
+(defvar tasogare--works-posts-index nil
+  "Hash table mapping work ID to list of post IDs.")
+
+(defun tasogare-build-reverse-index (notes)
+  "Build reverse index from NOTES."
+  (setq tasogare--works-posts-index (make-hash-table :test 'equal))
+  (dolist (note notes)
+    (when (eq (tasogare-note-type note) 'post)
+      (let ((post-id (vulpea-note-id note)))
+        (vulpea-utils-with-note note
+          (dolist (work (vulpea-note-meta-get-list note "works" 'note))
+            (let ((work-id (vulpea-note-id work)))
+              (puthash work-id
+                       (cons post-id
+                             (gethash work-id tasogare--works-posts-index))
+                       tasogare--works-posts-index))))))))
+#+end_src
+
+Call it in the input function:
+
+#+begin_src emacs-lisp
+:input
+(lambda ()
+  (let ((notes (vulpea-db-query-by-tags-every '("tasogare"))))
+    (tasogare-build-reverse-index notes)
+    notes))
+#+end_src
+
+** Works with Referencing Posts
+
+Include reverse references in JSON:
+
+#+begin_src emacs-lisp
+(defun tasogare-build-work-json (note output-file items)
+  "Build JSON metadata for work NOTE."
+  (let* ((id (vulpea-note-id note))
+         (posts (gethash id tasogare--works-posts-index)))
+    `((type . "work")
+      (id . ,id)
+      (category . ,(tasogare-note-category note))
+      (title . ,(vulpea-note-title note))
+      (status . ,(or (vulpea-note-meta-get note "status") "planned"))
+      (rating . ,(when-let ((r (vulpea-note-meta-get note "rating")))
+                   (string-to-number r)))
+      (posts . ,(or posts [])))))
+#+end_src
+
+** Generic JSON Compiler
+
+Use extra-args to pass builder function:
+
+#+begin_src emacs-lisp
+;; In rule outputs-extra:
+(porg-rule-output
+ :id (concat work-id ".json")
+ :type "json"
+ :item note
+ :file (porg-file-name-replace-ext output-file "json")
+ :extra-args `(:json-builder ,#'tasogare-build-work-json))
+
+;; Generic JSON compiler:
+(porg-compiler
+ :name "json"
+ :match (-rpartial #'porg-rule-output-that :type "json")
+ :hash #'porg-sha1sum
+ :build (lambda (item items _cache)
+          (let* ((json-builder (plist-get (porg-item-extra-args item)
+                                          :json-builder))
+                 (note (porg-item-item item))
+                 (output-file (porg-item-target-abs item))
+                 (metadata (funcall json-builder note output-file items)))
+            (with-current-buffer (find-file-noselect output-file)
+              (delete-region (point-min) (point-max))
+              (let ((json-encoding-pretty-print t))
+                (insert (json-encode metadata)))
+              (save-buffer)))))
+#+end_src
+
+* Common Patterns
+
+** Skipping vulpea-meta Section
+
+Extract content after metadata:
+
+#+begin_src emacs-lisp
+(cl-defun my-build-content (temp-target item _items)
+  "Build content for ITEM to TEMP-TARGET."
+  (with-current-buffer (find-file-noselect temp-target)
+    (delete-region (point-min) (point-max))
+    (insert (vulpea-utils-with-note (porg-item-item item)
+              (let* ((meta (vulpea-buffer-meta))
+                     (pl (plist-get meta :pl)))
+                (buffer-substring-no-properties
+                 (if pl
+                     (org-element-property :end pl)
+                   (save-excursion
+                     (goto-char (point-min))
+                     (while (looking-at org-property-re)
+                       (forward-line 1))
+                     (while (looking-at "^#\\+.+$")
+                       (forward-line 1))
+                     (while (looking-at "^ *$")
+                       (forward-line 1))
+                     (point)))
+                 (point-max)))))
+    (save-buffer)))
+#+end_src
+
+Or use the built-in:
+
+#+begin_src emacs-lisp
+(porg-extract-content note)
+#+end_src
+
+** Cover Image Resolution
+
+Find cover image in items table:
+
+#+begin_src emacs-lisp
+(defun resolve-cover-path (note cover-link items slug)
+  "Resolve cover image path."
+  (let* ((path (s-chop-prefix "attachment:" cover-link))
+         (filename (porg-file-name-for-web path))
+         (item-id (concat (vulpea-note-id note) ":" filename))
+         (item (gethash item-id items)))
+    (when item
+      (s-chop-prefix "src/public/content"
+                     (porg-item-target-rel item)))))
+#+end_src
+
+** UUID-Based Directory Names
+
+Split UUID into nested directories:
+
+#+begin_src emacs-lisp
+(defun directory-from-uuid (uuid)
+  "Convert UUID to directory structure."
+  (if (string-match string-uuid-regexp uuid)
+      (concat (s-left 2 uuid) "/" (s-chop-prefix (s-left 2 uuid) uuid))
+    uuid))
+
+;; "abc12345-..." -> "ab/c12345-..."
+#+end_src
+
+* Configuration Snippets
+
+** SQLite Cache for Large Projects
+
+#+begin_src emacs-lisp
+(setf porg-cache-backend 'sqlite)
+#+end_src
+
+** Adjusting Image Quality
+
+#+begin_src emacs-lisp
+(porg-images-compiler :max-width 1200 :quality 85)
+#+end_src
+
+** Debug Logging
+
+#+begin_src emacs-lisp
+(setf porg-log-level 'debug)
+#+end_src
+
+** Increase Parallel Jobs
+
+#+begin_src emacs-lisp
+(setf porg-async-max-jobs 16)
+#+end_src
+
+** File-Based Cache for Git
+
+#+begin_src emacs-lisp
+(setf porg-cache-backend 'file)
+(setf porg-cache-file-method 'pp)  ; Pretty-printed, git-friendly
+#+end_src
+
+** Dry Run Testing
+
+#+begin_src emacs-lisp
+(porg-run-dry "my-project")
+#+end_src

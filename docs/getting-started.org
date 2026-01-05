@@ -1,0 +1,282 @@
+#+title: Getting Started with Publicatorg
+#+author: Boris Buliga
+
+This guide walks you through setting up your first publicatorg project.
+
+* Prerequisites
+
+Before starting, ensure you have:
+
+- Emacs 29.1 or later
+- [[https://github.com/d12frosted/vulpea][vulpea]] configured and synced
+- A collection of vulpea notes you want to publish
+- Basic familiarity with Emacs Lisp
+
+* Installation
+
+** Via straight.el
+
+#+begin_src emacs-lisp
+(straight-use-package
+ '(publicatorg :host github :repo "d12frosted/publicatorg"))
+#+end_src
+
+** Via use-package with straight
+
+#+begin_src emacs-lisp
+(use-package publicatorg
+  :straight (:host github :repo "d12frosted/publicatorg"))
+#+end_src
+
+** Dependencies
+
+Publicatorg automatically pulls its dependencies:
+- =vulpea= 2.0+ - Note management
+- =emacsql= 3.0+ - Database queries
+- =org-ml= 5.8+ - Org-mode manipulation
+
+For image processing, you'll also need:
+- =cwebp= - WebP conversion (from libwebp)
+- =magick= (ImageMagick) - Fallback image processing
+
+* Your First Project
+
+** Project Structure
+
+A typical publicatorg project has this structure:
+
+#+begin_example
+my-blog/
+  build-rules.el    # Publicatorg configuration
+  notes-cache.db    # Build cache (generated)
+  output/           # Published files (generated)
+    posts/
+    images/
+#+end_example
+
+** Create build-rules.el
+
+Create a file called =build-rules.el= in your project root:
+
+#+begin_src emacs-lisp
+;;; build-rules.el --- Build rules for my blog -*- lexical-binding: t; -*-
+
+(require 'publicatorg)
+
+;; Use SQLite cache for faster incremental builds
+(setf porg-cache-backend 'sqlite)
+
+(porg-define
+ :name "my-blog"
+ :root (file-name-directory load-file-name)
+ :cache-file "notes-cache"
+
+ ;; Input: which notes to consider for publishing
+ :input
+ (lambda ()
+   (--filter
+    (and (null (vulpea-note-primary-title it))  ; Skip aliases
+         (= 0 (vulpea-note-level it)))          ; Only top-level notes
+    (vulpea-db-query-by-tags-every '("blog/public"))))
+
+ ;; Rules: how to transform notes into outputs
+ :rules
+ (list
+  (porg-rule
+   :name "posts"
+   :match (-rpartial #'vulpea-note-tagged-all-p "post")
+   :outputs
+   (porg-make-outputs
+    :file (lambda (note)
+            (concat "posts/"
+                    (porg-slug (vulpea-note-title note))
+                    ".md"))
+    :attach-dir (lambda (note attachment)
+                  (concat "images/"
+                          (porg-slug (vulpea-note-title note)))))))
+
+ ;; Compilers: how to build each output type
+ :compilers
+ (list
+  (porg-compiler
+   :name "posts"
+   :match (-rpartial #'porg-rule-output-that :type "note")
+   :hash #'porg-sha1sum
+   :build (porg-make-publish))
+  (porg-images-compiler)))
+
+(provide 'build-rules)
+;;; build-rules.el ends here
+#+end_src
+
+** Understanding the Configuration
+
+*** Input Function
+
+The =:input= function returns which notes publicatorg should consider:
+
+#+begin_src emacs-lisp
+:input
+(lambda ()
+  (vulpea-db-query-by-tags-every '("blog/public")))
+#+end_src
+
+This queries all notes tagged with =blog/public=.
+
+*** Rules
+
+Rules match notes and define outputs:
+
+#+begin_src emacs-lisp
+(porg-rule
+ :name "posts"
+ :match (-rpartial #'vulpea-note-tagged-all-p "post")
+ :outputs ...)
+#+end_src
+
+- =:name= - Unique identifier for debugging
+- =:match= - Predicate that selects which notes this rule handles
+- =:outputs= - Function that generates output specifications
+
+*** Compilers
+
+Compilers do the actual work of building outputs:
+
+#+begin_src emacs-lisp
+(porg-compiler
+ :name "posts"
+ :match (-rpartial #'porg-rule-output-that :type "note")
+ :hash #'porg-sha1sum
+ :build (porg-make-publish))
+#+end_src
+
+- =:match= - Which outputs this compiler handles
+- =:hash= - How to detect if content changed
+- =:build= - The actual build function
+
+* Running the Build
+
+** Basic Build
+
+#+begin_src emacs-lisp
+(require 'build-rules)
+(porg-run "my-blog")
+#+end_src
+
+Output shows progress:
+
+#+begin_example
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ >>> calculating build plan                                                   │
+└──────────────────────────────────────────────────────────────────────────────┘
+loading cache
+found 47 notes to resolve.
+found 148 items to resolve
+found 12 items to compile.
+found 0 items to delete.
+┌──────────────────────────────────────────────────────────────────────────────┐
+│ >>> build                                                                    │
+└──────────────────────────────────────────────────────────────────────────────┘
+[ 1/12] (posts) [sync] (note) My First Post
+[ 2/12] (posts:images) [async] (image) cover.webp
+...
+The work is done! Enjoy your published vulpea notes!
+#+end_example
+
+** Dry Run
+
+Preview what would be built without actually building:
+
+#+begin_src emacs-lisp
+(porg-run-dry "my-blog")
+#+end_src
+
+** Timed Build
+
+Get a timing report to identify bottlenecks:
+
+#+begin_src emacs-lisp
+(porg-run-timed "my-blog")
+#+end_src
+
+* Adding Images and Attachments
+
+Attachments are handled automatically when you use =porg-make-outputs= or =porg-attachments-output=.
+
+** Basic Attachment Handling
+
+#+begin_src emacs-lisp
+(porg-make-outputs
+ :file (lambda (note) ...)
+ :attach-dir (lambda (note attachment) "images"))
+#+end_src
+
+This copies all media attachments to the =images= directory.
+
+** Filtering Attachments
+
+Only include images (not videos or other files):
+
+#+begin_src emacs-lisp
+(porg-make-outputs
+ :file (lambda (note) ...)
+ :attach-dir (lambda (note attachment) "images")
+ :attach-filter #'porg-supported-image-p)
+#+end_src
+
+** Custom File Names
+
+Use =porg-file-name-for-web= to sanitize file names:
+
+#+begin_src emacs-lisp
+(porg-make-outputs
+ :file (lambda (note) ...)
+ :attach-dir (lambda (note attachment) "images")
+ :attach-file-mod #'porg-file-name-for-web)
+#+end_src
+
+This removes special characters and ensures web-safe names.
+
+* Using Void Rules
+
+Some notes serve as data sources but shouldn't be published directly. Use void rules:
+
+#+begin_src emacs-lisp
+(porg-rule-void :name "grapes" :tags '("wine" "grape"))
+#+end_src
+
+These notes:
+- Are included in the build system
+- Can be soft dependencies for other notes
+- Don't produce any output files
+
+* Debugging Builds
+
+** Increase Log Verbosity
+
+#+begin_src emacs-lisp
+(setf porg-log-level 'debug)
+#+end_src
+
+** Check Timing
+
+After =porg-run-timed=, call:
+
+#+begin_src emacs-lisp
+(porg-timing-report)
+#+end_src
+
+** Inspect Items
+
+The build creates a hash table of all items. Examine it:
+
+#+begin_src emacs-lisp
+(hash-table-count items)  ; Number of items
+(gethash "some-id" items) ; Get specific item
+#+end_src
+
+* Next Steps
+
+- [[file:concepts.org][Core Concepts]] - Understand the architecture in depth
+- [[file:api-reference.org][API Reference]] - Complete function documentation
+- [[file:examples.org][Examples]] - Real-world patterns from production sites

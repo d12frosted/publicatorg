@@ -1,0 +1,494 @@
+#+title: API Reference
+#+author: Boris Buliga
+
+Complete API documentation for publicatorg.
+
+* Entry Points
+
+** porg-run
+
+#+begin_src emacs-lisp
+(porg-run name)
+#+end_src
+
+Execute a build for project NAME.
+
+** porg-run-dry
+
+#+begin_src emacs-lisp
+(porg-run-dry name)
+#+end_src
+
+Preview what would be built without executing. Sets =porg-dry-run= to =t= during execution.
+
+** porg-run-timed
+
+#+begin_src emacs-lisp
+(porg-run-timed name)
+#+end_src
+
+Execute build with timing collection. Call =porg-timing-report= after to see results.
+
+* Project Definition
+
+** porg-define
+
+#+begin_src emacs-lisp
+(porg-define &rest args)
+#+end_src
+
+Define a publicatorg project.
+
+*Required arguments:*
+- =:name= (string) - Unique project identifier
+- =:root= (string) - Output directory path
+- =:cache-file= (string) - Cache file name (without extension)
+- =:input= (function) - Returns list of =vulpea-note= objects
+- =:rules= (list) - List of =porg-rule= or =porg-batch-rule=
+- =:compilers= (list) - List of =porg-compiler=
+
+*Optional arguments:*
+- =:describe= (function) - Custom item description for logging
+
+* Rules
+
+** porg-rule
+
+#+begin_src emacs-lisp
+(porg-rule &key name match outputs)
+#+end_src
+
+Create a rule that matches notes and generates outputs.
+
+- =:name= (string) - Unique rule name
+- =:match= (function) - Predicate =(vulpea-note) -> bool=
+- =:outputs= (function) - Function =(vulpea-note) -> list of porg-rule-output=
+
+** porg-rule-void
+
+#+begin_src emacs-lisp
+(porg-rule-void &key name tags)
+#+end_src
+
+Create a rule that voids notes with matching tags.
+
+- =:name= (string) - Rule name
+- =:tags= (list) - Tags that notes must have
+
+Voided notes are processed but produce no output files. Useful for soft dependencies.
+
+** porg-batch-rule
+
+#+begin_src emacs-lisp
+(porg-batch-rule &key name filter target publish)
+#+end_src
+
+Create a batch rule that runs after all regular items.
+
+- =:name= (string) - Rule name
+- =:filter= (function) - Predicate on =porg-item=
+- =:target= (string or function) - Output file path
+- =:publish= (function) - =(target items all-items cache) -> void=
+
+* Outputs
+
+** porg-note-output
+
+#+begin_src emacs-lisp
+(porg-note-output note &key file soft-deps hard-deps)
+#+end_src
+
+Create output for a note's content.
+
+- =note= - The =vulpea-note=
+- =:file= (string) - Relative output path
+- =:soft-deps= (list) - IDs that trigger rebuild when changed
+- =:hard-deps= (list) - IDs that must be built first
+
+** porg-attachments-output
+
+#+begin_src emacs-lisp
+(porg-attachments-output note &key dir file-mod filter owner variants)
+#+end_src
+
+Create outputs for note attachments.
+
+- =note= - The =vulpea-note=
+- =:dir= (string or function) - Output directory or =(attachment) -> string=
+- =:file-mod= (function or list) - File name modifier(s)
+- =:filter= (function) - Predicate on attachment name
+- =:owner= (vulpea-note) - Alternative owner for attachment IDs
+- =:variants= (list) - Generate multiple variants (e.g., sizes)
+
+** porg-void-output
+
+#+begin_src emacs-lisp
+(porg-void-output note)
+#+end_src
+
+Create a void output (processed but not published).
+
+** porg-make-outputs
+
+#+begin_src emacs-lisp
+(porg-make-outputs &key file attach-dir attach-filter attach-file-mod
+                        soft-deps hard-deps outputs-extra)
+#+end_src
+
+Convenience wrapper combining note and attachment outputs.
+
+- =:file= (function) - =(note) -> string= for output path
+- =:attach-dir= (function) - =(note attachment) -> string= for attachment dir
+- =:attach-filter= (function) - Predicate on attachment (default: =porg-supported-media-p=)
+- =:attach-file-mod= (function or list) - File name modifier (default: =porg-file-name-for-web=)
+- =:soft-deps= (function) - =(note) -> list= of soft dependencies
+- =:hard-deps= (function) - =(note) -> list= of hard dependencies
+- =:outputs-extra= (function) - =(note-output) -> list= of extra outputs
+
+Returns a function suitable for =:outputs= in =porg-rule=.
+
+** porg-rule-output
+
+#+begin_src emacs-lisp
+(porg-rule-output &key id type item file hard-deps soft-deps extra-args)
+#+end_src
+
+Low-level output constructor.
+
+- =:id= (string) - Unique identifier
+- =:type= (string) - Output type (e.g., "note", "attachment", "json")
+- =:item= - The source item
+- =:file= (string) - Relative output path
+- =:hard-deps= (list) - Hard dependencies
+- =:soft-deps= (list) - Soft dependencies
+- =:extra-args= (plist) - Additional arguments passed to compiler
+
+** porg-rule-output-that
+
+#+begin_src emacs-lisp
+(porg-rule-output-that output &key type predicate)
+#+end_src
+
+Check if OUTPUT matches type and predicate.
+
+- =output= - The =porg-rule-output=
+- =:type= (string) - Required type
+- =:predicate= (function) - Optional predicate on the item
+
+* Compilers
+
+** porg-compiler
+
+#+begin_src emacs-lisp
+(porg-compiler &key name match build async-build clean hash)
+#+end_src
+
+Create a compiler.
+
+- =:name= (string) - Compiler name for logging
+- =:match= (function) - Predicate on =porg-rule-output=
+- =:build= (function) - =(item items cache) -> void=
+- =:async-build= (function) - =(item items cache callback) -> process=
+- =:clean= (function) - =(item cache) -> void=
+- =:hash= (function) - =(item) -> string=
+
+** porg-images-compiler
+
+#+begin_src emacs-lisp
+(porg-images-compiler &key max-width quality hash)
+#+end_src
+
+Create an image compiler with WebP conversion.
+
+- =:max-width= (number) - Resize if wider (default: =porg-images-max-width=, 1600)
+- =:quality= (number) - WebP quality 0-100 (default: =porg-images-quality=, 75)
+- =:hash= (function) - Hash function (default: =porg-images-hash-default=)
+
+** porg-videos-compiler
+
+#+begin_src emacs-lisp
+(porg-videos-compiler &key hash)
+#+end_src
+
+Create a video compiler (copies files).
+
+- =:hash= (function) - Hash function (default: =porg-images-hash-default=)
+
+** porg-make-publish
+
+#+begin_src emacs-lisp
+(porg-make-publish &key copy-fn image-dir-fn sanitize-id-fn)
+#+end_src
+
+Create a build function for org-to-markdown conversion.
+
+- =:copy-fn= (function) - =(temp-target item items) -> void= for content extraction
+- =:image-dir-fn= (function) - =(item) -> string= for image directory in links
+- =:sanitize-id-fn= (function) - =(items) -> (link -> sanitized-link)=
+
+Returns a function suitable for =:build= in =porg-compiler=.
+
+* Utility Functions
+
+** Link Sanitization
+
+*** porg-sanitize-id-link
+
+#+begin_src emacs-lisp
+(porg-sanitize-id-link link items &key content-prefix)
+#+end_src
+
+Convert org ID link to file link.
+
+- =link= - Org link element
+- =items= - Hash table of all items
+- =:content-prefix= (string) - Prefix to strip from paths
+
+*** porg-clean-links-in-buffer
+
+#+begin_src emacs-lisp
+(porg-clean-links-in-buffer &key sanitize-id-fn)
+#+end_src
+
+Clean links in current buffer.
+
+*** porg-clean-noexport-headings
+
+#+begin_src emacs-lisp
+(porg-clean-noexport-headings file)
+#+end_src
+
+Remove headings tagged =:noexport:= from FILE.
+
+** File Name Utilities
+
+*** porg-slug
+
+#+begin_src emacs-lisp
+(porg-slug title)
+#+end_src
+
+Convert TITLE to URL-friendly slug. Removes special characters, converts to lowercase, replaces spaces with hyphens.
+
+*** porg-file-name-sanitize
+
+#+begin_src emacs-lisp
+(porg-file-name-sanitize file-name new-ext)
+#+end_src
+
+Sanitize FILE-NAME and set NEW-EXT. Replaces special characters with dashes.
+
+*** porg-file-name-for-web
+
+#+begin_src emacs-lisp
+(porg-file-name-for-web file-name)
+#+end_src
+
+Convert FILE-NAME to web-friendly format. Converts images to .webp extension.
+
+*** porg-file-name-replace-ext
+
+#+begin_src emacs-lisp
+(porg-file-name-replace-ext file-name new-ext)
+#+end_src
+
+Replace FILE-NAME extension with NEW-EXT.
+
+*** porg-file-name-set-variant
+
+#+begin_src emacs-lisp
+(porg-file-name-set-variant file variant)
+#+end_src
+
+Add VARIANT suffix to FILE (e.g., =image.webp= -> =image@800.webp=).
+
+** Media Detection
+
+*** porg-supported-media-p
+
+#+begin_src emacs-lisp
+(porg-supported-media-p file)
+#+end_src
+
+Return non-nil if FILE is a supported media type.
+
+*** porg-supported-image-p
+
+#+begin_src emacs-lisp
+(porg-supported-image-p file)
+#+end_src
+
+Return non-nil if FILE is a supported image.
+
+*** porg-supported-video-p
+
+#+begin_src emacs-lisp
+(porg-supported-video-p file)
+#+end_src
+
+Return non-nil if FILE is a supported video.
+
+*** porg-convertible-image-p
+
+#+begin_src emacs-lisp
+(porg-convertible-image-p file)
+#+end_src
+
+Return non-nil if FILE can be converted to WebP.
+
+** Hashing
+
+*** porg-sha1sum
+
+#+begin_src emacs-lisp
+(porg-sha1sum obj)
+#+end_src
+
+Calculate SHA1 hash of OBJ. Handles:
+- =vulpea-note= - Returns file hash from database
+- =porg-rule-output= - Hashes the item
+- String (file path) - Hashes file contents
+- Other - Serializes and hashes
+
+*** porg-sha1sum-attachment
+
+#+begin_src emacs-lisp
+(porg-sha1sum-attachment obj)
+#+end_src
+
+Hash for attachments based on mtime and size.
+
+** Content Extraction
+
+*** porg-extract-content
+
+#+begin_src emacs-lisp
+(porg-extract-content note)
+#+end_src
+
+Extract content from NOTE, skipping metadata section. Returns string.
+
+*** porg-copy-content-to-file
+
+#+begin_src emacs-lisp
+(porg-copy-content-to-file target-file item)
+#+end_src
+
+Copy content from ITEM's note to TARGET-FILE.
+
+** Cleanup
+
+*** porg-delete-with-metadata
+
+#+begin_src emacs-lisp
+(porg-delete-with-metadata file)
+#+end_src
+
+Delete FILE and its =.metadata= file if present.
+
+** Async Utilities
+
+*** porg-async-shell-command
+
+#+begin_src emacs-lisp
+(porg-async-shell-command command callback)
+#+end_src
+
+Run COMMAND asynchronously, call CALLBACK with =(success error-msg)=.
+
+** Topological Sort
+
+*** porg-topological-sort
+
+#+begin_src emacs-lisp
+(porg-topological-sort graph &key test)
+#+end_src
+
+Return topologically sorted elements of GRAPH.
+
+*** porg-topological-levels
+
+#+begin_src emacs-lisp
+(porg-topological-levels graph &optional test)
+#+end_src
+
+Return parallel-safe levels for GRAPH.
+
+* Configuration Variables
+
+** Build Behavior
+
+| Variable                   | Default | Description                        |
+|----------------------------+---------+------------------------------------|
+| =porg-dry-run=             | =nil=   | Preview mode (no file changes)     |
+| =porg-enable-cleanup=      | =t=     | Enable cleanup phase               |
+| =porg-detect-output-clashes= | =nil= | Detect duplicate output IDs        |
+
+** Async Compilation
+
+| Variable              | Default | Description                     |
+|-----------------------+---------+---------------------------------|
+| =porg-async-max-jobs= | =8=     | Max parallel async jobs         |
+
+** Cache
+
+| Variable                | Default | Description                       |
+|-------------------------+---------+-----------------------------------|
+| =porg-cache-backend=    | ='file= | Cache backend (='file= or ='sqlite=) |
+| =porg-cache-file-method= | ='pp=  | File serialization (='pp= or ='prin1=) |
+
+** Images
+
+| Variable                          | Default                    | Description                |
+|-----------------------------------+----------------------------+----------------------------|
+| =porg-images-max-width=           | =1600=                     | Max image width (px)       |
+| =porg-images-quality=             | =75=                       | WebP quality (0-100)       |
+| =porg-supported-image-extensions= | =(jpeg png jpg heic ...)=  | Supported image types      |
+| =porg-convertible-image-extensions= | =(jpeg png jpg heic webp)= | Types convertible to WebP |
+| =porg-supported-video-extensions= | =(mp4)=                    | Supported video types      |
+
+** Logging
+
+| Variable        | Default  | Description                     |
+|-----------------+----------+---------------------------------|
+| =porg-log-level= | ='info= | Log verbosity (='info= or ='debug=) |
+
+** Timing
+
+| Variable               | Default | Description                  |
+|------------------------+---------+------------------------------|
+| =porg-timing-enabled=  | =nil=   | Collect timing data          |
+| =porg-timing-top-n=    | =20=    | Track top N slowest items    |
+
+* Data Structures
+
+** porg-item
+
+Resolved item ready for building.
+
+| Accessor              | Type   | Description              |
+|-----------------------+--------+--------------------------|
+| =porg-item-id=        | string | Unique identifier        |
+| =porg-item-type=      | string | Output type              |
+| =porg-item-item=      | any    | Source item              |
+| =porg-item-target-rel= | string | Relative output path    |
+| =porg-item-target-abs= | string | Absolute output path    |
+| =porg-item-rule=      | string | Rule name                |
+| =porg-item-compiler=  | string | Compiler name            |
+| =porg-item-hard-deps= | list   | Hard dependency IDs      |
+| =porg-item-soft-deps= | list   | Soft dependency IDs      |
+| =porg-item-extra-args= | plist | Additional arguments     |
+
+** porg-cache-item
+
+Cache entry for tracking builds.
+
+| Accessor                       | Type   | Description         |
+|--------------------------------+--------+---------------------|
+| =porg-cache-item-hash=         | string | Content hash        |
+| =porg-cache-item-output=       | string | Output path         |
+| =porg-cache-item-project-hash= | string | Project config hash |
+| =porg-cache-item-rule=         | string | Rule name           |
+| =porg-cache-item-rule-hash=    | string | Rule definition hash |
+| =porg-cache-item-compiler=     | string | Compiler name       |
+| =porg-cache-item-compiler-hash= | string | Compiler hash      |
