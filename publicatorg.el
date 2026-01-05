@@ -396,44 +396,46 @@ VARIANTS is a list of output alternatives. By each attachment has
 one default output (with no extra args) and extra output for each
 variant, which is passed as extra args in form of a
 plist (:variant)."
-  (let ((attach-dir (vulpea-note-attach-dir note)))
-    (->> (vulpea-note-path note)
-         (vulpea-db-query-attachments-by-path)
-         (--filter (or (not filter) (funcall filter it)))
-         (--mapcat
-          (let* ((dir (if (functionp dir) (funcall dir it) dir))
-                 (newname (concat (file-name-as-directory dir) it))
-                 (newnames (cond
-                            ((null file-mod) (list newname))
-                            ((functionp file-mod) (list (funcall file-mod newname)))
-                            ((listp file-mod) (--map (funcall it newname) file-mod)))))
-            (-map
-             (lambda (newname)
-               (cons
-                (porg-rule-output
-                 :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
-                 :type "attachment"
-                 :item (expand-file-name it attach-dir)
-                 :file newname)
-                (-map
-                 (lambda (variant)
-                   (porg-rule-output
-                    :id (concat (vulpea-note-id (or owner note)) ":"
-                                (file-name-nondirectory newname)
-                                "@" (number-to-string variant))
-                    :type "attachment"
-                    :item (expand-file-name it attach-dir)
-                    :file (porg-file-name-set-variant newname variant)
-                    :extra-args `(:variant ,variant)))
-                 variants)))
-             newnames)))
-         (-flatten)
-         (funcall
-          (lambda (list)
-            (let ((-compare-fn (lambda (a b)
-                                 (string-equal (porg-rule-output-id a)
-                                               (porg-rule-output-id b)))))
-              (-distinct list)))))))
+  (->> (vulpea-note-path note)
+       (vulpea-db-query-attachments-by-path)
+       ;; Each item is now (dest . attach-dir) pair
+       (--filter (or (not filter) (funcall filter (car it))))
+       (--mapcat
+        (let* ((dest (car it))
+               (attach-dir (cdr it))
+               (dir (if (functionp dir) (funcall dir dest) dir))
+               (newname (concat (file-name-as-directory dir) dest))
+               (newnames (cond
+                          ((null file-mod) (list newname))
+                          ((functionp file-mod) (list (funcall file-mod newname)))
+                          ((listp file-mod) (--map (funcall it newname) file-mod)))))
+          (-map
+           (lambda (newname)
+             (cons
+              (porg-rule-output
+               :id (concat (vulpea-note-id (or owner note)) ":" (file-name-nondirectory newname))
+               :type "attachment"
+               :item (expand-file-name dest attach-dir)
+               :file newname)
+              (-map
+               (lambda (variant)
+                 (porg-rule-output
+                  :id (concat (vulpea-note-id (or owner note)) ":"
+                              (file-name-nondirectory newname)
+                              "@" (number-to-string variant))
+                  :type "attachment"
+                  :item (expand-file-name dest attach-dir)
+                  :file (porg-file-name-set-variant newname variant)
+                  :extra-args `(:variant ,variant)))
+               variants)))
+           newnames)))
+       (-flatten)
+       (funcall
+        (lambda (list)
+          (let ((-compare-fn (lambda (a b)
+                               (string-equal (porg-rule-output-id a)
+                                             (porg-rule-output-id b)))))
+            (-distinct list))))))
 
 (cl-defun porg-void-output (note)
   "Make a void output for NOTE."
