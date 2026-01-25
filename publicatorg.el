@@ -1989,10 +1989,10 @@ Uses file modification time and size for OBJ."
   "Create an images compiler with configurable options.
 
 MAX-WIDTH is the maximum image width (default `porg-images-max-width').
-QUALITY is the cwebp quality 0-100 (default `porg-images-quality').
+QUALITY is the vipsthumbnail quality 0-100 (default `porg-images-quality').
 HASH is the hash function (default `porg-images-hash-default').
 
-Uses cwebp + sips for fast image processing, with magick fallback."
+Uses vipsthumbnail for fast image processing with auto-orientation."
   (porg-compiler
    :name "images"
    :match (-rpartial #'porg-rule-output-that
@@ -2006,20 +2006,10 @@ Uses cwebp + sips for fast image processing, with magick fallback."
          (let* ((input (porg-item-item item))
                 (output (porg-item-target-abs item))
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
-                                    max-width))
-                (width (porg-image-width input)))
-           (if (> width item-max-width)
-               (unless (zerop (call-process-shell-command
-                               (format "cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null"
-                                       quality item-max-width input output)))
-                 (shell-command-to-string
-                  (format "magick '%s' -strip -auto-orient -resize %dx100^ '%s'"
-                          input item-max-width output)))
-             (unless (zerop (call-process-shell-command
-                             (format "cwebp -q %d '%s' -o '%s' 2>/dev/null"
-                                     quality input output)))
-               (shell-command-to-string
-                (format "magick '%s' -strip -auto-orient '%s'" input output)))))
+                                    max-width)))
+           (call-process-shell-command
+            (format "vipsthumbnail '%s' --size %dx> --rotate -o '%s[Q=%d,strip]'"
+                    input item-max-width output quality)))
        (copy-file (porg-item-item item) (porg-item-target-abs item) t)))
    :async-build
    (lambda (item _items _cache callback)
@@ -2029,17 +2019,8 @@ Uses cwebp + sips for fast image processing, with magick fallback."
                 (output (porg-item-target-abs item))
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
                                     max-width))
-                (width (porg-image-width input))
-                (needs-resize (> width item-max-width))
-                (cmd (if needs-resize
-                         (format "cwebp -q %d -resize %d 0 '%s' -o '%s' 2>/dev/null || \
-magick '%s' -strip -auto-orient -resize %dx100^ '%s'"
-                                 quality item-max-width input output
-                                 input item-max-width output)
-                       (format "cwebp -q %d '%s' -o '%s' 2>/dev/null || \
-magick '%s' -strip -auto-orient '%s'"
-                               quality input output
-                               input output))))
+                (cmd (format "vipsthumbnail '%s' --size %dx> --rotate -o '%s[Q=%d,strip]'"
+                             input item-max-width output quality)))
            (porg-async-shell-command cmd callback (file-name-nondirectory output)))
        ;; Non-convertible: just copy
        (copy-file (porg-item-item item) (porg-item-target-abs item) t)

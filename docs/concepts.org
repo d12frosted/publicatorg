@@ -352,7 +352,7 @@ Use =porg-async-shell-command= helper:
 :async-build
 (lambda (item items cache callback)
   (porg-async-shell-command
-   (format "cwebp -q 80 %s -o %s"
+   (format "vipsthumbnail %s --rotate -o %s[Q=80,strip]"
            (shell-quote-argument (porg-item-item item))
            (shell-quote-argument (porg-item-target-abs item)))
    callback))

@@ -36,8 +36,7 @@ Publicatorg automatically pulls its dependencies:
 - =org-ml= 5.8+ - Org-mode manipulation
 
 For image processing, you'll also need:
-- =cwebp= - WebP conversion (from libwebp)
-- =magick= (ImageMagick) - Fallback image processing
+- =vips= (libvips) - Image processing and WebP conversion
 
 * Your First Project
 
