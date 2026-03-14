@@ -2008,7 +2008,7 @@ Uses vipsthumbnail for fast image processing with auto-orientation."
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
                                     max-width)))
            (call-process-shell-command
-            (format "vipsthumbnail '%s' --size %dx> --rotate -o '%s[Q=%d,strip]'"
+            (format "vipsthumbnail '%s' --size '%dx>' --rotate -o '%s[Q=%d,strip]'"
                     input item-max-width output quality)))
        (copy-file (porg-item-item item) (porg-item-target-abs item) t)))
    :async-build
@@ -2019,7 +2019,7 @@ Uses vipsthumbnail for fast image processing with auto-orientation."
                 (output (porg-item-target-abs item))
                 (item-max-width (or (plist-get (porg-item-extra-args item) :variant)
                                     max-width))
-                (cmd (format "vipsthumbnail '%s' --size %dx> --rotate -o '%s[Q=%d,strip]'"
+                (cmd (format "vipsthumbnail '%s' --size '%dx>' --rotate -o '%s[Q=%d,strip]'"
                              input item-max-width output quality)))
            (porg-async-shell-command cmd callback (file-name-nondirectory output)))
        ;; Non-convertible: just copy
