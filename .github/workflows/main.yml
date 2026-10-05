@@ -35,6 +35,5 @@ jobs:
       - name: Lint
         run: make lint
 
-      # emacs provided by setup-emacs doesn't contain sqlite built-in
-      # - name: Test
-      #   run: make test
+      - name: Test
+        run: make test
