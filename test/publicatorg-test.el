@@ -798,7 +798,10 @@
   (setq org-roam-directory dir
         vulpea-db-location (expand-file-name "vulpea.db" dir)
         vulpea-db-sync-directories (list dir)
-        vulpea-default-notes-directory dir)
+        vulpea-default-notes-directory dir
+        ;; Specs query the database right after changing notes, so index
+        ;; in this process rather than in a background worker
+        vulpea-db-async-extraction nil)
   (vulpea-db-autosync-mode +1)
   ;; Force a blocking sync to populate the database
   (vulpea-db-sync-update-directory dir t))
@@ -809,6 +812,13 @@
   (when (file-exists-p vulpea-db-location)
     (delete-file vulpea-db-location)))
 
+(defun porg-test-worker-processes ()
+  "Return live vulpea extraction worker processes."
+  (seq-filter (lambda (proc)
+                (and (string-prefix-p "vulpea-worker" (process-name proc))
+                     (process-live-p proc)))
+              (process-list)))
+
 
 
 (describe "publicatorg"
@@ -818,6 +828,12 @@
   (before-each
     (spy-on 'porg-test-build-item :and-call-through)
     (spy-on 'porg-test-clean-item :and-call-through))
+
+  (after-each
+    (expect (porg-test-worker-processes) :to-equal nil))
+
+  (it "should index every test note before the first run"
+    (expect (length (vulpea-db-query)) :to-equal 6))
 
   (it "should build every item on the first run"
     (porg-run "porg-test")
