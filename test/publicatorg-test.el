@@ -38,6 +38,11 @@
 
 (setq-default porg-log-level 'debug)
 
+(defun porg-test-write-bytes (file bytes)
+  "Write unibyte string BYTES to FILE without any encoding."
+  (let ((coding-system-for-write 'no-conversion))
+    (write-region bytes nil file nil 'silent)))
+
 
 
 ;; Unit tests for pure functions (no vulpea/org-roam setup required)
@@ -141,7 +146,16 @@
 
   (it "handles strings"
     (expect (porg-sha1sum "hello") :to-be-truthy)
-    (expect (length (porg-sha1sum "hello")) :to-equal 40)))
+    (expect (length (porg-sha1sum "hello")) :to-equal 40))
+
+  (it "hashes file contents byte for byte"
+    (let ((file (make-temp-file "porg-sha1sum-test" nil ".png"))
+          (bytes (unibyte-string #x89 #x50 #x4e #x47 #x0d #x0a #x00 #xff #xc3 #xa9)))
+      (unwind-protect
+          (progn
+            (porg-test-write-bytes file bytes)
+            (expect (porg-sha1sum file) :to-equal (secure-hash 'sha1 bytes)))
+        (delete-file file)))))
 
 (describe "porg-string-from-number"
   (it "converts number to string"

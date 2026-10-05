@@ -1619,6 +1619,9 @@ OBJ can be either a note, a file or a Lisp object."
      (stringp obj)
      (file-exists-p obj))
     (with-temp-buffer
+      ;; Keep raw bytes as is; a multibyte buffer converts them to
+      ;; characters and back, which is ~10x slower on binary files.
+      (set-buffer-multibyte nil)
       (insert-file-contents-literally obj)
       (secure-hash 'sha1 (current-buffer))))
 
