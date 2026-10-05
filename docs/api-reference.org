@@ -356,7 +356,9 @@ Calculate SHA1 hash of OBJ. Handles:
 (porg-sha1sum-attachment obj)
 #+end_src
 
-Hash for attachments based on mtime and size.
+Hash for attachment outputs: SHA1 of the attachment file contents on disk. Replacing an attachment under the same name triggers a rebuild even when its note did not change. Returns nil when the file does not exist.
+
+Every run reads every attachment. For very large media, =porg-images-hash-default= (modification time and size) is the cheaper option.
 
 ** Content Extraction
 

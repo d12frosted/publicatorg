@@ -157,6 +157,77 @@
             (expect (porg-sha1sum file) :to-equal (secure-hash 'sha1 bytes)))
         (delete-file file)))))
 
+(describe "porg-sha1sum-attachment"
+  :var (dir file output)
+  (before-each
+    ;; Hashes stored in the vulpea database only change when the note
+    ;; owning the attachment is re-indexed, so they must not be used.
+    (spy-on 'vulpea-db)
+    (setq dir (file-name-as-directory (make-temp-file "porg-attachment-test" 'dir))
+          file (expand-file-name "Cover (1).png" dir)
+          output (porg-rule-output
+                  :id "7e2be9ec-ae39-47c3-a1f9-b987cccff082:Cover-1.webp"
+                  :type "attachment"
+                  :item file
+                  :file "images/Cover-1.webp"))
+    (porg-test-write-bytes file (unibyte-string #x89 #x50 #x4e #x47 #x00 #xff)))
+
+  (after-each
+    (delete-directory dir t))
+
+  (it "returns sha1 of the attachment file"
+    (expect (porg-sha1sum-attachment output)
+            :to-equal (secure-hash 'sha1 (unibyte-string #x89 #x50 #x4e #x47 #x00 #xff))))
+
+  (it "changes when the attachment is replaced under the same name"
+    (let ((before (porg-sha1sum-attachment output)))
+      (porg-test-write-bytes file (unibyte-string #x89 #x50 #x4e #x47 #x00 #xfe))
+      (expect (porg-sha1sum-attachment output) :not :to-equal before)))
+
+  (it "does not consult the vulpea database"
+    (porg-sha1sum-attachment output)
+    (expect 'vulpea-db :not :to-have-been-called))
+
+  (it "returns nil when the attachment file is missing"
+    (delete-file file)
+    (expect (porg-sha1sum-attachment output) :to-be nil))
+
+  (it "signals an error for anything but a rule output"
+    (expect (porg-sha1sum-attachment file) :to-throw 'user-error))
+
+  (it "lets the build plan pick up an attachment replaced under the same name"
+    (let* ((id (porg-rule-output-id output))
+           (rule (porg-rule :name "test" :match #'identity :outputs #'identity))
+           (compiler (porg-compiler :name "images" :match #'identity
+                                    :hash #'porg-sha1sum-attachment))
+           (project (porg-project-create
+                     :name "attachment-test" :root dir :cache-file "cache"
+                     :input (lambda () nil) :rules (list rule) :compilers (list compiler)))
+           (cache (porg-test-make-cache))
+           (items-fn (lambda ()
+                       (let ((items (make-hash-table :test 'equal)))
+                         (puthash id
+                                  (porg-item-create
+                                   :id id :type "attachment" :item file
+                                   :hash (porg-sha1sum-attachment output)
+                                   :rule rule :compiler compiler
+                                   :target-rel (porg-rule-output-file output)
+                                   :target-abs (expand-file-name (porg-rule-output-file output) dir)
+                                   :hard-deps nil :soft-deps nil)
+                                  items)
+                         items))))
+      ;; Cache as left by a build of the original file
+      (porg-cache-put cache id (porg-cache-item-create
+                                :hash (porg-sha1sum-attachment output)
+                                :output (porg-rule-output-file output)
+                                :rule "test" :rule-hash (porg-sha1sum rule)
+                                :compiler "images" :compiler-hash (porg-sha1sum compiler)))
+      (expect (plist-get (porg-build-plan project (funcall items-fn) cache) :build)
+              :to-equal nil)
+      (porg-test-write-bytes file (unibyte-string #x89 #x50 #x4e #x47 #x00 #xfe))
+      (expect (plist-get (porg-build-plan project (funcall items-fn) cache) :build)
+              :to-equal (list id)))))
+
 (describe "porg-string-from-number"
   (it "converts number to string"
     (expect (porg-string-from-number 42) :to-equal "42"))

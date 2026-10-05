@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+* Unreleased
+
+** Fixes
+
+- =porg-sha1sum-attachment= hashes the attachment file itself. It used to read the hash from a custom vulpea =attachments= table, but the query passed the whole output id as the note id, so it never matched: every attachment hashed to nil and counted as unchanged forever. Replacing an attachment under the same name now triggers a rebuild without re-indexing its note, and the =attachments= table is not needed anymore. Existing caches hold empty hashes for attachments, so the first run after upgrading rebuilds all of them (and the notes that embed them) once.
+
+** Performance
+
+- =porg-sha1sum= hashes files in a unibyte buffer, about 10x faster on binary files, with the same result.
+
 * v1.0.0-rc.1
 
 First release candidate.
