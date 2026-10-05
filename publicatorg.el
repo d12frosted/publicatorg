@@ -1477,24 +1477,19 @@ overhead of repeated org-ml-update calls."
         (insert replacement-text)))))
 
 (defun porg-sha1sum-attachment (obj)
-  "Calculate sha1sum of attachment OBJ from vulpea database.
+  "Calculate sha1sum of attachment OBJ.
 
-This queries the attachments table in the vulpea database to get
-the hash for the given attachment. The attachments table should have
-columns: note-id, file, hash.
+OBJ should be a `porg-rule-output' with type \"attachment\", its
+item being the path to the attachment file.
 
-OBJ should be a `porg-rule-output' with type \"attachment\"."
+The hash is computed from the file contents on disk, so replacing an
+attachment under the same name is detected even when the note that
+owns it did not change. Return nil when the file does not exist."
   (cond
    ((porg-rule-output-p obj)
-    (let ((id (s-split ":" (porg-rule-output-id obj)))
-          (file (file-name-nondirectory (porg-rule-output-item obj))))
-      (emacsql
-       (vulpea-db)
-       [:select hash
-        :from attachments
-        :where (and (= note-id $s1)
-                    (= file $s2))]
-       id file)))
+    (let ((file (porg-rule-output-item obj)))
+      (when (file-exists-p file)
+        (porg-sha1sum file))))
    (t (user-error "Unknown type of attachment: %s" obj))))
 
 (cl-defun porg-sanitize-id-link (link items &key (content-prefix ""))
