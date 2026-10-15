@@ -13,6 +13,8 @@ Complete API documentation for publicatorg.
 
 Execute a build for project NAME.
 
+Before planning, the vulpea database is brought up to date with the notes on disk (see =porg-sync-vulpea-db=), so notes changed, added or deleted while nothing was indexing them are part of the plan. This matters most in a fresh =emacs --batch=, where vulpea's autosync has not run yet when the build starts.
+
 ** porg-run-dry
 
 #+begin_src emacs-lisp
@@ -425,6 +427,9 @@ Return parallel-safe levels for GRAPH.
 | =porg-dry-run=             | =nil=   | Preview mode (no file changes)     |
 | =porg-enable-cleanup=      | =t=     | Enable cleanup phase               |
 | =porg-detect-output-clashes= | =nil= | Detect duplicate output IDs        |
+| =porg-sync-vulpea-db=      | =t=     | Sync vulpea database before planning |
+
+=porg-sync-vulpea-db= calls =vulpea-db-sync-catch-up= (vulpea 2.8+), which indexes new, changed and deleted notes under =vulpea-db-sync-directories= in the session and waits for it; an unchanged note costs a stat. Notes indexed outside those directories are kept as they are, so make sure the directories cover your notes (the default is =org-directory=). The sync also runs in a dry run: it changes the vulpea database, never the build outputs. With an older vulpea =porg-run= warns and plans from the database as it is. Set it to =nil= when the build script keeps the database up to date itself.
 
 ** Async Compilation
 

@@ -781,6 +781,18 @@
   "Clean FILE."
   (delete-file file))
 
+(defun porg-test-write-note (name id title body)
+  "Write note NAME with ID, TITLE and BODY to the test notes directory.
+The file is written directly, as an editor outside Emacs would, so
+nothing indexes it.  A buffer visiting it is killed first, since it
+would not match the file anymore."
+  (let ((file (expand-file-name name org-roam-directory)))
+    (when-let* ((buffer (find-buffer-visiting file)))
+      (kill-buffer buffer))
+    (with-temp-file file
+      (insert (format ":PROPERTIES:\n:ID: %s\n:END:\n#+title: %s\n\n%s\n"
+                      id title body)))))
+
 
 
 (defvar porg-test-directory (expand-file-name "test/notes")
@@ -871,7 +883,6 @@
 
   (it "should call cleanup for deleted note"
     (delete-file (expand-file-name "created-note-1.org" org-roam-directory))
-    (vulpea-db-sync--cleanup-deleted-files)
     (porg-run "porg-test")
     (expect 'porg-test-clean-item :to-have-been-called-times 1))
 
@@ -887,7 +898,6 @@
       (spy-calls-reset 'porg-test-build-item)
 
       (delete-file (vulpea-note-path note-1))
-      (vulpea-db-sync--cleanup-deleted-files)
       (porg-run "porg-test")
       (expect 'porg-test-clean-item :to-have-been-called-times 1)
       (expect 'porg-test-build-item :to-have-been-called-times 1)))
@@ -917,6 +927,36 @@
       (porg-run "porg-test")
       (expect 'porg-test-build-item :to-have-been-called-times 1)
       (expect 'porg-test-clean-item :to-have-been-called-times 1)))
+
+  ;; Notes below change on disk with nothing indexing them, as in a
+  ;; fresh `emacs --batch': autosync is on, but its startup scan and
+  ;; watchers only run from timers and process output.
+
+  (it "should build a note changed on disk behind the database"
+    (porg-test-write-note "note-3.org" "75c053d9-62eb-4f58-9e05-dbd6a23a9ef1"
+                          "Note 3" "I was edited while nothing watched.")
+    (porg-run "porg-test")
+    (expect 'porg-test-build-item :to-have-been-called-times 1))
+
+  (it "should build a note created on disk behind the database"
+    (porg-test-write-note "offline-note.org" "3b1c86a2-0c4e-4f43-a0ad-5f2f43f6d1d1"
+                          "Offline note" "Nobody indexed me.")
+    (porg-run "porg-test")
+    (expect 'porg-test-build-item :to-have-been-called-times 1))
+
+  (it "should clean a note deleted on disk behind the database"
+    (delete-file (expand-file-name "offline-note.org" org-roam-directory))
+    (porg-run "porg-test")
+    (expect 'porg-test-clean-item :to-have-been-called-times 1))
+
+  (it "should plan from the database as it is when porg-sync-vulpea-db is nil"
+    (porg-test-write-note "note-3.org" "75c053d9-62eb-4f58-9e05-dbd6a23a9ef1"
+                          "Note 3" "Edited again, and longer this time.")
+    (let ((porg-sync-vulpea-db nil))
+      (porg-run "porg-test"))
+    (expect 'porg-test-build-item :to-have-been-called-times 0)
+    (porg-run "porg-test")
+    (expect 'porg-test-build-item :to-have-been-called-times 1))
 
   (describe "porg-make-outputs"
     (it "returns note output as the last item"
