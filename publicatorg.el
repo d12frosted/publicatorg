@@ -40,6 +40,34 @@
 
 
 
+(defgroup publicatorg nil
+  "Make your vulpea notes public."
+  :group 'org
+  :prefix "porg-")
+
+(defcustom porg-sync-vulpea-db t
+  "Whether `porg-run' brings the vulpea database up to date first.
+
+The build plan comes from the vulpea database: which notes exist,
+their metadata and links, and the hashes that tell which ones
+changed.  A database behind the files on disk gives a plan that
+misses those changes.  In a fresh `emacs --batch' it usually is
+behind: `vulpea-db-autosync-mode' scans and indexes from timers and
+process output, and those do not run while the build does.
+
+When non-nil, `porg-run' calls `vulpea-db-sync-catch-up' before
+planning, which indexes every new, changed and deleted note under
+`vulpea-db-sync-directories' and waits for it.  An unchanged note
+costs a stat, and notes outside those directories are left as they
+are.  The sync runs in a dry run too.  Set this to nil when
+the database is known to be up to date, for example when the build
+script syncs it itself.
+
+This needs a vulpea that provides `vulpea-db-sync-catch-up'; with an
+older one `porg-run' warns and plans from the database as it is."
+  :type 'boolean
+  :group 'publicatorg)
+
 (defvar porg--projects nil)
 (defvar porg-enable-cleanup t)
 (defvar porg-detect-output-clashes nil)
@@ -909,15 +937,36 @@ Returns the process object."
     proc))
 
 
+(defun porg--sync-vulpea-db ()
+  "Bring the vulpea database up to date with the notes on disk.
+See `porg-sync-vulpea-db'."
+  (if (fboundp 'vulpea-db-sync-catch-up)
+      (progn
+        (porg-log "syncing vulpea database")
+        (vulpea-db-sync-catch-up))
+    (display-warning
+     'publicatorg
+     (concat "This vulpea cannot sync its database before the build"
+             " (it lacks `vulpea-db-sync-catch-up'), so the plan may miss"
+             " notes changed on disk.  Update vulpea, or set"
+             " `porg-sync-vulpea-db' to nil to silence this.")
+     :warning)))
+
 ;;;###autoload
 (defun porg-run (name)
-  "Export project with NAME."
+  "Export project with NAME.
+
+The vulpea database is brought up to date before planning, unless
+`porg-sync-vulpea-db' is nil."
   (let ((project (assoc-default name porg--projects)))
     (unless project
       (user-error "Could not find project named '%s'" name))
     (when porg-timing-enabled
       (porg-timing-reset))
     (porg-log-s "calculating build plan")
+    (when porg-sync-vulpea-db
+      (porg-timing-measure 'phase "db-sync"
+        (porg--sync-vulpea-db)))
     (let ((default-directory (porg-project-root project)))
       (porg-log "loading cache")
       (let* ((cache-file (expand-file-name (porg-project-cache-file project)

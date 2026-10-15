@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ** Fixes
 
+- =porg-run= brings the vulpea database up to date before it plans the build. The plan comes from the database (which notes exist, their metadata and links, and the hashes =porg-sha1sum= compares), and in a fresh =emacs --batch= the database is usually behind: =vulpea-db-autosync-mode= scans and indexes from timers and process output, which do not run while the build does. So notes edited while no Emacs was watching were missed, and the build said "Nothing to build, everything is up to date". The build now calls =vulpea-db-sync-catch-up= first, which indexes new, changed and deleted notes in the session and waits for it; an unchanged note costs a stat. It needs vulpea 2.8 or newer: with an older vulpea =porg-run= warns and plans from the database as before. Set the new =porg-sync-vulpea-db= to nil to skip the sync, for example when the build script keeps the database up to date itself.
+
 - =porg-sha1sum-attachment= hashes the attachment file itself. It used to read the hash from a custom vulpea =attachments= table, but the query passed the whole output id as the note id, so it never matched: every attachment hashed to nil and counted as unchanged forever. Replacing an attachment under the same name now triggers a rebuild without re-indexing its note, and the =attachments= table is not needed anymore. Existing caches hold empty hashes for attachments, so the first run after upgrading rebuilds all of them (and the notes that embed them) once.
 
 ** Performance
